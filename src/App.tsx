@@ -48,6 +48,8 @@ export default function App() {
   const [triggerShake, setTriggerShake] = useState(false);
   const [isPosted, setIsPosted] = useState(false);
   const [currentRoastData, setCurrentRoastData] = useState<{ input: string, roast: string } | null>(null);
+  const [showAnalysisScreen, setShowAnalysisScreen] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
 
   useEffect(() => {
     // Check for saved player in local storage
@@ -91,6 +93,19 @@ export default function App() {
     }
   };
 
+  const startAnalysisAnimation = () => {
+    setAnalysisProgress(0);
+    const interval = setInterval(() => {
+      setAnalysisProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          return 100;
+        }
+        return prev + 1;
+      });
+    }, 20);
+  };
+
   const handleTrackerLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!riotId.includes('#')) {
@@ -101,7 +116,7 @@ export default function App() {
     setAuthLoading(true);
     setSupabaseError(null);
 
-    const [name, tag] = riotId.split('#');
+    const [name, tag] = riotId.split('#').map(s => s.trim());
 
     const apiKey = import.meta.env.VITE_HENRIK_API_KEY;
     const headers = apiKey ? { Authorization: apiKey } : {};
@@ -120,7 +135,7 @@ export default function App() {
         const matchesRes = await axios.get(`https://api.henrikdev.xyz/valorant/v3/matches/${region}/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`, { headers });
         matches = matchesRes.data.data || [];
       } catch (err) {
-        console.warn("Failed to fetch matches", err);
+        console.warn("Matches not found for this profile, proceeding with profile only.");
       }
 
       const stats: PlayerStats = {
@@ -137,6 +152,8 @@ export default function App() {
       setPlayer(stats);
       localStorage.setItem('valorant_player', JSON.stringify(stats));
       setSupabaseError(null);
+      setShowAnalysisScreen(true);
+      startAnalysisAnimation();
 
       // Auto-analyze profile
       setAnalyzing(true);
@@ -144,10 +161,12 @@ export default function App() {
       setProfileAnalysis(analysis);
       setAnalyzing(false);
     } catch (error: any) {
-      console.error("Erro ao buscar stats:", error);
       const isNotFound = error.response?.status === 404;
       
-      // Fallback: Login without stats if API fails
+      if (!isNotFound) {
+        console.error("Erro crítico ao buscar stats:", error);
+      }
+      
       const fallbackStats: PlayerStats = {
         name,
         tag,
@@ -157,11 +176,18 @@ export default function App() {
       };
       setPlayer(fallbackStats);
       localStorage.setItem('valorant_player', JSON.stringify(fallbackStats));
+      setShowAnalysisScreen(true);
+      startAnalysisAnimation();
       
+      setAnalyzing(true);
+      const analysis = await analyzeProfile(fallbackStats);
+      setProfileAnalysis(analysis);
+      setAnalyzing(false);
+
       if (isNotFound) {
-        setSupabaseError("Aviso: Player não encontrado. Verifique se o Nick#TAG está correto e o perfil está público.");
+        setSupabaseError("Aviso: Player não encontrado. Verifique se o Nick#TAG está correto. Entrando em modo convidado.");
       } else {
-        setSupabaseError("Aviso: O Tracker está instável ou o limite de buscas foi atingido. Você entrou como convidado.");
+        setSupabaseError("Aviso: O serviço de rastreamento está instável. Você entrou como convidado.");
       }
     } finally {
       setAuthLoading(false);
@@ -341,6 +367,125 @@ export default function App() {
     );
   }
 
+  if (player && showAnalysisScreen) {
+    return (
+      <div className="min-h-screen bg-[#0f1923] flex flex-col items-center justify-center p-4 md:p-8 relative val-grid overflow-hidden">
+        <div className="absolute inset-0 bg-vignette pointer-events-none z-0" />
+        <div className="scanline" />
+        
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="val-border bg-[#1f2933] w-full max-w-4xl p-6 md:p-12 relative z-10 neon-glow overflow-hidden"
+        >
+          {/* Scanning Animation Header */}
+          <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-6 md:px-12">
+            <div className="val-header w-full flex justify-center items-center text-[10px] md:text-base !bg-[#ff4655] !text-white">
+              <div className="flex items-center gap-4">
+                <Activity className="animate-pulse" size={18} />
+                <span>INSPEÇÃO DE PERFIL: EM CURSO</span>
+                <Activity className="animate-pulse" size={18} />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col md:flex-row gap-8 md:gap-12 mt-8 md:mt-10">
+            {/* Player Card & Info */}
+            <div className="md:w-1/3 space-y-6">
+              <div className="relative group">
+                <div className="val-border p-2 bg-black/40">
+                  <img 
+                    src={player.card || "https://picsum.photos/seed/val/400/400"} 
+                    className="w-full aspect-[1/1] object-cover border-2 border-[#ff4655]/30 group-hover:border-[#ff4655] transition-all" 
+                    alt="Card"
+                    referrerPolicy="no-referrer"
+                  />
+                  {/* Scan bar animation */}
+                  <motion.div 
+                    animate={{ top: ['0%', '100%', '0%'] }} 
+                    transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                    className="absolute left-0 w-full h-1 bg-[#ff4655] shadow-[0_0_15px_#ff4655] z-30 opacity-60"
+                  />
+                </div>
+                <div className="mt-4 text-center md:text-left">
+                  <h2 className="font-display text-4xl uppercase italic tracking-tighter truncate">{player.name}</h2>
+                  <p className="font-mono text-sm text-[#ff4655] font-bold">#{player.tag}</p>
+                </div>
+              </div>
+
+              <div className="val-border p-4 bg-black/20 space-y-4">
+                <div className="flex justify-between items-end border-b border-[#ece8e1]/10 pb-2">
+                  <span className="font-mono text-[10px] uppercase opacity-40">RANK ATUAL</span>
+                  <span className="font-display text-xl text-[#00b2a9]">{player.rank || '??'}</span>
+                </div>
+                <div className="flex justify-between items-end border-b border-[#ece8e1]/10 pb-2">
+                  <span className="font-mono text-[10px] uppercase opacity-40">STATUS SISTEMA</span>
+                  <span className="font-mono text-[10px] text-[#ff4655] animate-pulse">
+                    {analysisProgress < 100 ? 'Rastreando...' : 'Análise Concluída'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* AI Analysis Reveal */}
+            <div className="md:w-2/3 flex flex-col justify-between">
+              <div className="val-border bg-black/40 p-6 flex-1 relative overflow-y-auto max-h-[400px] custom-scrollbar">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-1.5 h-1.5 bg-[#ff4655] rounded-full animate-ping" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest opacity-50">Veredito do Analista</span>
+                </div>
+
+                {analyzing ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
+                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }}>
+                      <Skull size={48} className="text-[#ff4655] opacity-20" />
+                    </motion.div>
+                    <p className="font-mono text-xs uppercase tracking-widest opacity-30 animate-pulse">Compilando insultos personalizados...</p>
+                  </div>
+                ) : (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="font-mono text-sm md:text-base leading-relaxed text-[#ece8e1] whitespace-pre-wrap italic"
+                  >
+                    {profileAnalysis || "O sistema falhou em encontrar palavras para descrever sua ruindade."}
+                  </motion.div>
+                )}
+              </div>
+
+              {/* Progress Bar & Actions */}
+              <div className="mt-8 space-y-6">
+                <div className="w-full h-1.5 bg-black/50 overflow-hidden val-border !border-[#ece8e1]/10">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${analysisProgress}%` }}
+                    className="h-full bg-[#ff4655] shadow-[0_0_10px_#ff4655]"
+                  />
+                </div>
+
+                <div className="flex flex-col md:flex-row gap-4">
+                  <button 
+                    onClick={() => setShowAnalysisScreen(false)}
+                    disabled={analysisProgress < 100}
+                    className={`val-btn flex-1 text-xl ${analysisProgress < 100 ? 'opacity-30 cursor-not-allowed grayscale' : 'val-btn-primary'}`}
+                  >
+                    ACESSAR DASHBOARD COMPLETO
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Decorative elements */}
+        <div className="absolute top-1/2 left-4 -translate-y-1/2 hidden lg:flex flex-col gap-8 opacity-20">
+          <div className="writing-vertical-rl font-mono text-[10px] uppercase tracking-[0.5em]">PROTOCOLO_ANALISE</div>
+          <div className="w-[1px] h-32 bg-[#ece8e1]" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col font-sans overflow-x-hidden bg-[#0f1923] val-grid moving-grid relative val-cursor">
       <div className="absolute inset-0 bg-vignette pointer-events-none z-0" />
@@ -395,6 +540,16 @@ export default function App() {
                 {player.rank || 'SEM RANK'}
               </span>
             </div>
+            <button 
+              onClick={() => {
+                setShowAnalysisScreen(true);
+                startAnalysisAnimation();
+              }}
+              className="hover:bg-white hover:text-[#ff4655] transition-all p-1.5 md:p-2 border border-white/20 ml-2"
+              title="Voltar para Análise"
+            >
+              <Activity size={16} className="md:w-5 md:h-5" />
+            </button>
             <button 
               onClick={handleSignOut}
               className="hover:bg-white hover:text-[#ff4655] transition-all p-1.5 md:p-2 border border-white/20 ml-2"
@@ -457,6 +612,18 @@ export default function App() {
 
                 <button
                   type="button"
+                  onClick={() => {
+                    setShowAnalysisScreen(true);
+                    startAnalysisAnimation();
+                  }}
+                  className="val-btn text-xs w-full flex items-center justify-center gap-2 border-[#ece8e1]/10 text-[#ece8e1]/60 hover:text-[#ff4655] hover:border-[#ff4655]/40"
+                >
+                  <Activity size={18} />
+                  VER VEREDITO DO ANALISTA
+                </button>
+
+                <button
+                  type="button"
                   onClick={handleSignOut}
                   className="val-btn val-btn-secondary w-full text-base"
                 >
@@ -498,14 +665,14 @@ export default function App() {
                   scale: triggerShake ? [1, 1.05, 1] : 1,
                   boxShadow: triggerShake 
                     ? "0 0 80px rgba(255, 70, 85, 0.8), inset 0 0 40px rgba(255, 70, 85, 0.4)" 
-                    : "0 0 15px rgba(0, 255, 0, 0.2)",
-                  borderColor: triggerShake ? "#ff4655" : "#00FF00"
+                    : "0 0 15px rgba(255, 70, 85, 0.2)",
+                  borderColor: "#ff4655"
                 }}
                 transition={{ 
                   duration: triggerShake ? 0.3 : 0.5,
                   ease: "easeInOut"
                 }}
-                className={`val-border p-8 bg-black text-[#00FF00] relative transition-colors duration-150 border-2 overflow-hidden ${triggerShake ? 'border-valorant-red' : 'border-[#00FF00]'}`}
+                className={`val-border p-8 bg-black text-white relative transition-colors duration-150 border-2 overflow-hidden border-[#ff4655]`}
               >
                 {/* Background Glitch Overlay */}
                 {triggerShake && (
@@ -517,13 +684,13 @@ export default function App() {
                 )}
 
                 <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-30 px-12">
-                  <div className={`py-3 font-display text-2xl skew-x-[-12deg] transition-all duration-150 flex items-center justify-center w-full ${triggerShake ? 'bg-valorant-red text-white scale-110 shadow-[0_0_20px_rgba(255,70,85,1)]' : 'bg-[#00FF00] text-black'}`}>
+                  <div className={`py-3 font-display text-2xl skew-x-[-12deg] transition-all duration-150 flex items-center justify-center w-full ${triggerShake ? 'bg-valorant-red text-white scale-110 shadow-[0_0_20px_rgba(255,70,85,1)]' : 'bg-[#ff4655] text-[#0f1923]'}`}>
                     {triggerShake ? 'ELIMINADO!' : 'VEREDITO FINAL:'}
                   </div>
                 </div>
                 
                 <div className="relative z-10 pt-16 text-center">
-                  <p className={`text-2xl font-display uppercase italic leading-relaxed transition-all duration-150 tracking-tight ${triggerShake ? 'text-white glitch-red italic' : 'text-[#00FF00]'}`}>
+                  <p className={`text-2xl font-display uppercase italic leading-relaxed transition-all duration-150 tracking-tight ${triggerShake ? 'text-white glitch-red italic' : 'text-[#ff4655]'}`}>
                     "{lastRoast}"
                   </p>
 
