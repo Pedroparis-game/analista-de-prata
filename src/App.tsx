@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Skull, Send, Trophy, Trash2, ShieldAlert, Gamepad2, LogIn, LogOut, UserPlus, Mail, Lock, User, Search, Activity } from 'lucide-react';
+import { Skull, Send, Trophy, Trash2, ShieldAlert, Gamepad2, LogIn, LogOut, UserPlus, Mail, Lock, User, Search, Activity, Languages, Zap, Brain, Target, Shield, AlertTriangle, RotateCcw } from 'lucide-react';
 import { generateRoast, analyzeProfile, analyzeMatch, chatWithAnalista } from './lib/gemini';
 import { supabase } from './lib/supabase';
+import { translations, Language } from './lib/translations';
 import axios from 'axios';
 
 interface ShameEntry {
@@ -30,7 +31,17 @@ interface ChatMessage {
   text: string;
 }
 
+interface ProfileAnalysisResult {
+  archetype: { title: string, description: string };
+  scoutingReport: { rankLevel: string, mechanical: string, mental: string };
+  crushingSummary: string;
+}
+
 export default function App() {
+  const [language, setLanguage] = useState<Language>('en');
+  const t = translations[language];
+
+  const [showApp, setShowApp] = useState(false);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [mural, setMural] = useState<ShameEntry[]>([]);
@@ -43,7 +54,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
-  const [profileAnalysis, setProfileAnalysis] = useState<string | null>(null);
+  const [profileAnalysis, setProfileAnalysis] = useState<ProfileAnalysisResult | null>(null);
   const [topBagres, setTopBagres] = useState<ShameEntry[]>([]);
   const [triggerShake, setTriggerShake] = useState(false);
   const [isPosted, setIsPosted] = useState(false);
@@ -63,6 +74,20 @@ export default function App() {
     fetchMural();
   }, [supabase]);
 
+  // Re-analyze when language changes (with debounce)
+  useEffect(() => {
+    if (player && showApp && !analyzing) {
+      const timer = setTimeout(async () => {
+        setAnalyzing(true);
+        const analysis = await analyzeProfile(player, language);
+        setProfileAnalysis(analysis);
+        setAnalyzing(false);
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [language, player?.name, player?.tag]);
+
   const fetchMural = async () => {
     if (!supabase) return;
     
@@ -74,8 +99,8 @@ export default function App() {
       .limit(10);
     
     if (muralError) {
-      console.error("Erro ao buscar mural:", muralError);
-      setSupabaseError(`Erro ao buscar: ${muralError.message}`);
+      console.error("Error fetching mural:", muralError);
+      setSupabaseError(`${t.errors.details}: ${muralError.message}`);
     } else if (muralData) {
       setMural(muralData as ShameEntry[]);
       setSupabaseError(null);
@@ -109,7 +134,7 @@ export default function App() {
   const handleTrackerLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!riotId.includes('#')) {
-      setSupabaseError("Formato inválido. Use Nome#TAG");
+      setSupabaseError(t.login.errorFormat);
       return;
     }
 
@@ -144,7 +169,7 @@ export default function App() {
         level: accRes.data.data.account_level,
         card: accRes.data.data.card?.small,
         region,
-        rank: mmrRes.data?.data?.currenttierpatched || "Sem Rank",
+        rank: mmrRes.data?.data?.currenttierpatched || t.match.unknownMap,
         mmr: mmrRes.data?.data?.elo || 0,
         matches
       };
@@ -157,14 +182,14 @@ export default function App() {
 
       // Auto-analyze profile
       setAnalyzing(true);
-      const analysis = await analyzeProfile(stats);
+      const analysis = await analyzeProfile(stats, language);
       setProfileAnalysis(analysis);
       setAnalyzing(false);
     } catch (error: any) {
       const isNotFound = error.response?.status === 404;
       
       if (!isNotFound) {
-        console.error("Erro crítico ao buscar stats:", error);
+        console.error("Critical error fetching stats:", error);
       }
       
       const fallbackStats: PlayerStats = {
@@ -180,14 +205,14 @@ export default function App() {
       startAnalysisAnimation();
       
       setAnalyzing(true);
-      const analysis = await analyzeProfile(fallbackStats);
+      const analysis = await analyzeProfile(fallbackStats, language);
       setProfileAnalysis(analysis);
       setAnalyzing(false);
 
       if (isNotFound) {
-        setSupabaseError("Aviso: Player não encontrado. Verifique se o Nick#TAG está correto. Entrando em modo convidado.");
+        setSupabaseError(t.login.errorNotFound);
       } else {
-        setSupabaseError("Aviso: O serviço de rastreamento está instável. Você entrou como convidado.");
+        setSupabaseError(t.login.errorUnstable);
       }
     } finally {
       setAuthLoading(false);
@@ -200,13 +225,14 @@ export default function App() {
     setSelectedMatch(null);
     setChatMessages([]);
     localStorage.removeItem('valorant_player');
+    setShowApp(false);
   };
 
   const handleMatchSelect = async (match: any) => {
     if (!player) return;
     setAnalyzing(true);
-    setSelectedMatch({ ...match, analysis: 'Analisando o show de horrores...' });
-    const analysis = await analyzeMatch(match, player);
+    setSelectedMatch({ ...match, analysis: t.match.analyzing });
+    const analysis = await analyzeMatch(match, player, language);
     setSelectedMatch({ ...match, analysis });
     setAnalyzing(false);
   };
@@ -220,7 +246,7 @@ export default function App() {
     setChatInput('');
     setAnalyzing(true);
 
-    const response = await chatWithAnalista(chatMessages, chatInput, player);
+    const response = await chatWithAnalista(chatMessages, chatInput, player, language);
     setChatMessages(prev => [...prev, { role: 'model', text: response || '...' }]);
     setAnalyzing(false);
   };
@@ -234,7 +260,7 @@ export default function App() {
     setSupabaseError(null);
     setIsPosted(false);
 
-    const roast = await generateRoast(input, player);
+    const roast = await generateRoast(input, player, language);
     setLastRoast(roast);
     setCurrentRoastData({ input, roast });
     setTriggerShake(true);
@@ -251,15 +277,15 @@ export default function App() {
     const { error } = await supabase.from('hall_of_shame').insert([
       {
         user_id: player ? `${player.name}#${player.tag}` : 'web_user',
-        user_email: player ? `${player.name}#${player.tag} (${player.rank || 'BRONZE EM ALMA'})` : 'Anônimo',
+        user_email: player ? `${player.name}#${player.tag} (${player.rank || 'BRONZE SOUL'})` : 'Anonymous',
         user_input: currentRoastData.input,
         bot_response: currentRoastData.roast
       }
     ]);
 
     if (error) {
-      console.error("Erro ao salvar no mural:", error);
-      setSupabaseError(`Erro ao salvar: ${error.message}`);
+      console.error("Error saving to mural:", error);
+      setSupabaseError(`Save failed: ${error.message}`);
     } else {
       setIsPosted(true);
       fetchMural();
@@ -267,9 +293,44 @@ export default function App() {
     setLoading(false);
   };
 
-  if (!player) {
-    return (
-      <div className="min-h-screen bg-[#0f1923] flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden val-grid moving-grid val-cursor">
+  return (
+    <div className="min-h-screen bg-[#0f1923] text-[#ece8e1] overflow-x-hidden relative">
+      <div className="fixed top-4 left-4 z-[100] flex gap-2">
+        <button 
+          onClick={() => setLanguage('en')} 
+          className={`val-btn !text-[10px] !px-2 !py-1 !min-h-0 !h-auto ${language === 'en' ? 'bg-[#ff4655] text-white border-[#ff4655]' : 'bg-black/40 text-[#ece8e1]/50 border-[#ece8e1]/10'}`}
+        >
+          EN
+        </button>
+        <button 
+          onClick={() => setLanguage('pt')} 
+          className={`val-btn !text-[10px] !px-2 !py-1 !min-h-0 !h-auto ${language === 'pt' ? 'bg-[#ff4655] text-white border-[#ff4655]' : 'bg-black/40 text-[#ece8e1]/50 border-[#ece8e1]/10'}`}
+        >
+          PT
+        </button>
+      </div>
+
+    <AnimatePresence mode="wait">
+      {!showApp ? (
+        <motion.div
+          key="landing"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }}
+          transition={{ duration: 0.8 }}
+          className="w-full"
+        >
+          <LandingPage onEnter={() => setShowApp(true)} t={t} language={language} />
+        </motion.div>
+      ) : !player ? (
+        <motion.div
+          key="login"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 1.05, filter: 'blur(5px)' }}
+          transition={{ duration: 0.5 }}
+          className="min-h-screen bg-[#0f1923] flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden val-grid moving-grid val-cursor"
+        >
         <div className="absolute inset-0 bg-vignette pointer-events-none" />
         <div className="scanline" />
         
@@ -300,16 +361,16 @@ export default function App() {
         >
           <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-6 md:px-12">
             <div className="val-header w-full flex justify-center items-center text-[10px] md:text-base">
-              <div>PROTOCOLO DE ACESSO: INICIADO</div>
+              <div>{t.login.header}</div>
             </div>
           </div>
 
           <div className="text-center mb-8 md:mb-10 pt-4">
             <h1 className="font-display text-5xl md:text-8xl uppercase leading-[0.8] mb-6 tracking-tighter italic val-title-hover transition-all cursor-default">
-              Analista <br /> <span className="text-[#ff4655] glitch-red">de Prata</span>
+              Silver <br /> <span className="text-[#ff4655] glitch-red">Analyst</span>
             </h1>
             <p className="font-mono text-[10px] md:text-xs uppercase tracking-[0.2em] text-[#ece8e1] opacity-50">
-              Rastreamento de Desempenho // Protocolo de Humilhação
+              {t.login.subtitle}
             </p>
           </div>
 
@@ -319,7 +380,7 @@ export default function App() {
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#ff4655] transition-transform group-focus-within:scale-110" size={20} />
                 <input 
                   type="text" 
-                  placeholder="RIOT ID (Ex: Player#BR1)"
+                  placeholder={t.login.placeholder}
                   value={riotId}
                   onChange={(e) => setRiotId(e.target.value)}
                   className="w-full pl-12 pr-4 py-5 bg-[#0f1923] border-b-2 border-[#ece8e1]/20 font-mono text-xl focus:outline-none focus:border-[#ff4655] transition-all placeholder:opacity-20 uppercase val-input-pulse"
@@ -332,7 +393,7 @@ export default function App() {
                 disabled={authLoading}
                 className="val-btn val-btn-primary w-full text-2xl"
               >
-                {authLoading ? 'CONFIGURANDO HUD...' : 'RASTREAR MEU BRONZE'}
+                {authLoading ? t.login.loading : t.login.button}
               </button>
             </form>
 
@@ -347,7 +408,7 @@ export default function App() {
             <div className="pt-4 border-t border-[#ece8e1]/10 flex justify-between items-center">
               <span className="font-mono text-[9px] uppercase opacity-30">Ver. 2.0.0A</span>
               <p className="font-mono text-[9px] uppercase opacity-30 text-right max-w-[200px]">
-                O Analista usa a API pública do Valorant para ver quão afundado você está.
+                {t.login.footer}
               </p>
             </div>
           </div>
@@ -363,13 +424,16 @@ export default function App() {
           <div className="w-2 h-1 bg-[#ff4655]" />
           <div className="w-12 h-1 bg-[#ece8e1]/20" />
         </div>
-      </div>
-    );
-  }
-
-  if (player && showAnalysisScreen) {
-    return (
-      <div className="min-h-screen bg-[#0f1923] flex flex-col items-center justify-center p-4 md:p-8 relative val-grid overflow-hidden">
+      </motion.div>
+      ) : showAnalysisScreen ? (
+        <motion.div
+          key="analysis"
+          initial={{ opacity: 0, scale: 1.1 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, y: -20 }}
+          transition={{ duration: 0.6 }}
+          className="min-h-screen bg-[#0f1923] flex flex-col items-center justify-center p-4 md:p-8 relative val-grid overflow-hidden"
+        >
         <div className="absolute inset-0 bg-vignette pointer-events-none z-0" />
         <div className="scanline" />
         
@@ -383,7 +447,7 @@ export default function App() {
             <div className="val-header w-full flex justify-center items-center text-[10px] md:text-base !bg-[#ff4655] !text-white">
               <div className="flex items-center gap-4">
                 <Activity className="animate-pulse" size={18} />
-                <span>INSPEÇÃO DE PERFIL: EM CURSO</span>
+                <span>{t.analysis.header}</span>
                 <Activity className="animate-pulse" size={18} />
               </div>
             </div>
@@ -415,13 +479,13 @@ export default function App() {
 
               <div className="val-border p-4 bg-black/20 space-y-4">
                 <div className="flex justify-between items-end border-b border-[#ece8e1]/10 pb-2">
-                  <span className="font-mono text-[10px] uppercase opacity-40">RANK ATUAL</span>
+                  <span className="font-mono text-[10px] uppercase opacity-40">{t.analysis.rankLabel}</span>
                   <span className="font-display text-xl text-[#00b2a9]">{player.rank || '??'}</span>
                 </div>
                 <div className="flex justify-between items-end border-b border-[#ece8e1]/10 pb-2">
-                  <span className="font-mono text-[10px] uppercase opacity-40">STATUS SISTEMA</span>
+                  <span className="font-mono text-[10px] uppercase opacity-40">{t.analysis.statusLabel}</span>
                   <span className="font-mono text-[10px] text-[#ff4655] animate-pulse">
-                    {analysisProgress < 100 ? 'Rastreando...' : 'Análise Concluída'}
+                    {analysisProgress < 100 ? t.analysis.tracking : t.analysis.complete}
                   </span>
                 </div>
               </div>
@@ -432,7 +496,7 @@ export default function App() {
               <div className="val-border bg-black/40 p-6 flex-1 relative overflow-y-auto max-h-[400px] custom-scrollbar">
                 <div className="flex items-center gap-2 mb-4">
                   <div className="w-1.5 h-1.5 bg-[#ff4655] rounded-full animate-ping" />
-                  <span className="font-mono text-[10px] uppercase tracking-widest opacity-50">Veredito do Analista</span>
+                  <span className="font-mono text-[10px] uppercase tracking-widest opacity-50">{t.analysis.verdictTitle}</span>
                 </div>
 
                 {analyzing ? (
@@ -440,16 +504,63 @@ export default function App() {
                     <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }}>
                       <Skull size={48} className="text-[#ff4655] opacity-20" />
                     </motion.div>
-                    <p className="font-mono text-xs uppercase tracking-widest opacity-30 animate-pulse">Compilando insultos personalizados...</p>
+                    <p className="font-mono text-xs uppercase tracking-widest opacity-30 animate-pulse">{t.analysis.compiling}</p>
                   </div>
-                ) : (
+                ) : profileAnalysis ? (
                   <motion.div 
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="font-mono text-sm md:text-base leading-relaxed text-[#ece8e1] whitespace-pre-wrap italic"
+                    className="space-y-6"
                   >
-                    {profileAnalysis || "O sistema falhou em encontrar palavras para descrever sua ruindade."}
+                    {/* Archetype Header */}
+                    <div className="border-l-4 border-[#ff4655] pl-4 py-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Zap size={14} className="text-[#ff4655]" />
+                        <span className="font-mono text-[10px] uppercase tracking-widest text-[#ff4655] font-bold">{t.analysis.labels.archetype}</span>
+                      </div>
+                      <h4 className="font-display text-2xl italic uppercase text-white">{profileAnalysis.archetype.title}</h4>
+                      <p className="font-mono text-[11px] opacity-60 uppercase">{profileAnalysis.archetype.description}</p>
+                    </div>
+
+                    {/* Scouting Report Grid */}
+                    <div className="grid gap-4">
+                      <div className="bg-white/5 p-4 val-border border-white/5">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Brain size={16} className="text-[#00b2a9]" />
+                          <span className="font-mono text-[10px] uppercase font-bold text-[#00b2a9]">{t.analysis.labels.strategic}</span>
+                        </div>
+                        <p className="font-mono text-xs leading-relaxed italic opacity-80 uppercase">{profileAnalysis.scoutingReport.rankLevel}</p>
+                      </div>
+
+                      <div className="bg-white/5 p-4 val-border border-white/5">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Target size={16} className="text-[#ff4655]" />
+                          <span className="font-mono text-[10px] uppercase font-bold text-[#ff4655]">{t.analysis.labels.mechanical}</span>
+                        </div>
+                        <p className="font-mono text-xs leading-relaxed italic opacity-80 uppercase">{profileAnalysis.scoutingReport.mechanical}</p>
+                      </div>
+
+                      <div className="bg-white/5 p-4 val-border border-white/5">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle size={16} className="text-yellow-500" />
+                          <span className="font-mono text-[10px] uppercase font-bold text-yellow-500">{t.analysis.labels.stability}</span>
+                        </div>
+                        <p className="font-mono text-xs leading-relaxed italic opacity-80 uppercase">{profileAnalysis.scoutingReport.mental}</p>
+                      </div>
+                    </div>
+
+                    {/* Final Verdict */}
+                    <div className="pt-4 border-t border-white/10">
+                      <span className="font-mono text-[10px] uppercase opacity-40 mb-2 block">{t.analysis.labels.finalVerdict}</span>
+                      <p className="font-mono text-sm leading-relaxed text-[#ece8e1] whitespace-pre-wrap italic bg-[#ff4655]/10 p-4 border border-[#ff4655]/20">
+                        {profileAnalysis.crushingSummary}
+                      </p>
+                    </div>
                   </motion.div>
+                ) : (
+                  <div className="text-center p-8 opacity-20 font-mono italic">
+                    {t.analysis.empty}
+                  </div>
                 )}
               </div>
 
@@ -466,10 +577,9 @@ export default function App() {
                 <div className="flex flex-col md:flex-row gap-4">
                   <button 
                     onClick={() => setShowAnalysisScreen(false)}
-                    disabled={analysisProgress < 100}
-                    className={`val-btn flex-1 text-xl ${analysisProgress < 100 ? 'opacity-30 cursor-not-allowed grayscale' : 'val-btn-primary'}`}
+                    className="val-btn flex-1 text-xl val-btn-primary"
                   >
-                    ACESSAR DASHBOARD COMPLETO
+                    {t.analysis.accessButton}
                   </button>
                 </div>
               </div>
@@ -479,15 +589,18 @@ export default function App() {
 
         {/* Decorative elements */}
         <div className="absolute top-1/2 left-4 -translate-y-1/2 hidden lg:flex flex-col gap-8 opacity-20">
-          <div className="writing-vertical-rl font-mono text-[10px] uppercase tracking-[0.5em]">PROTOCOLO_ANALISE</div>
+          <div className="writing-vertical-rl font-mono text-[10px] uppercase tracking-[0.5em]">{t.analysis.protocol}</div>
           <div className="w-[1px] h-32 bg-[#ece8e1]" />
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen flex flex-col font-sans overflow-x-hidden bg-[#0f1923] val-grid moving-grid relative val-cursor">
+      </motion.div>
+      ) : (
+        <motion.div
+          key="dashboard"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="min-h-screen flex flex-col font-sans overflow-x-hidden bg-[#0f1923] val-grid moving-grid relative val-cursor"
+        >
       <div className="absolute inset-0 bg-vignette pointer-events-none z-0" />
       <div className="scanline" />
       
@@ -512,15 +625,15 @@ export default function App() {
         <div className="marquee-track font-display text-lg md:text-xl uppercase tracking-[0.3em] opacity-40">
           {[...Array(4)].map((_, i) => (
             <span key={i} className="flex items-center">
-              <span className="mx-4 md:mx-6 text-sm md:text-xl">ANALISTA DE PRATA.EXE</span>
+              <span className="mx-4 md:mx-6 text-sm md:text-xl">{t.marquee.title}</span>
               <span className="mx-4 md:mx-6 opacity-30">//</span>
-              <span className="mx-4 md:mx-6 text-sm md:text-xl">MURAL DA VERGONHA</span>
+              <span className="mx-4 md:mx-6 text-sm md:text-xl">{t.marquee.hall}</span>
               <span className="mx-4 md:mx-6 opacity-30">//</span>
-              <span className="mx-4 md:mx-6 text-[#ff4655] text-sm md:text-xl">TREINADOR TÓXICO</span>
+              <span className="mx-4 md:mx-6 text-[#ff4655] text-sm md:text-xl">{t.marquee.coach}</span>
               <span className="mx-4 md:mx-6 opacity-30">//</span>
-              <span className="mx-4 md:mx-6 text-sm md:text-xl">SKILL ISSUE DETECTADO</span>
+              <span className="mx-4 md:mx-6 text-sm md:text-xl">{t.marquee.issue}</span>
               <span className="mx-4 md:mx-6 opacity-30">//</span>
-              <span className="mx-4 md:mx-6 text-sm md:text-xl">VIDA DE BRONZE ETERNO</span>
+              <span className="mx-4 md:mx-6 text-sm md:text-xl">{t.marquee.life}</span>
               <span className="mx-4 md:mx-6 opacity-30">//</span>
             </span>
           ))}
@@ -537,23 +650,23 @@ export default function App() {
                 {player.name}
               </span>
               <span className="font-mono text-[8px] md:text-[9px] uppercase font-bold opacity-80 truncate">
-                {player.rank || 'SEM RANK'}
+                {player.rank || t.match.noRank}
               </span>
             </div>
             <button 
               onClick={() => {
                 setShowAnalysisScreen(true);
-                startAnalysisAnimation();
+                // No need to restart animation if it's already running
               }}
               className="hover:bg-white hover:text-[#ff4655] transition-all p-1.5 md:p-2 border border-white/20 ml-2"
-              title="Voltar para Análise"
+              title={t.header.back}
             >
               <Activity size={16} className="md:w-5 md:h-5" />
             </button>
             <button 
               onClick={handleSignOut}
               className="hover:bg-white hover:text-[#ff4655] transition-all p-1.5 md:p-2 border border-white/20 ml-2"
-              title="Sair"
+              title={t.header.signOut}
             >
               <LogOut size={16} className="md:w-5 md:h-5" />
             </button>
@@ -572,19 +685,19 @@ export default function App() {
             >
               <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-6 md:px-10">
                 <div className="val-header w-full flex justify-center items-center text-[10px] md:text-base">
-                  <div>TERMINAL DE ENVIO</div>
+                  <div>{t.dashboard.submission}</div>
                 </div>
               </div>
               
               <p className="mb-4 md:mb-6 font-mono text-[10px] md:text-xs uppercase opacity-50 mt-8 tracking-widest text-center">
-                Relate seu show de horrores tático.
+                {t.dashboard.reportPrompt}
               </p>
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="EX: PICK RIET DE REYNA, 2/20, CULPEI O SAGE..."
+                  placeholder={t.dashboard.placeholder}
                   className="w-full h-40 p-5 bg-[#0f1923] text-[#ece8e1] border-b-2 border-[#ff4655] focus:outline-none focus:bg-[#2a3744] transition-all font-mono placeholder:opacity-10 resize-none"
                 />
                 <button
@@ -599,27 +712,24 @@ export default function App() {
                   ) : (
                     <>
                       <Send size={24} className="mr-4" />
-                      GERAR VEREDITO
+                      {t.dashboard.generate}
                     </>
                   )}
                 </button>
                 
                 <div className="flex items-center gap-4 pt-4">
                   <div className="flex-1 h-[1px] bg-white/5"></div>
-                  <span className="font-mono text-[9px] uppercase opacity-20 tracking-[0.5em]">MÓDULOS SISTEMA</span>
+                  <span className="font-mono text-[9px] uppercase opacity-20 tracking-[0.5em]">{t.dashboard.modules}</span>
                   <div className="flex-1 h-[1px] bg-white/5"></div>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowAnalysisScreen(true);
-                    startAnalysisAnimation();
-                  }}
+                  onClick={() => setShowAnalysisScreen(true)}
                   className="val-btn text-xs w-full flex items-center justify-center gap-2 border-[#ece8e1]/10 text-[#ece8e1]/60 hover:text-[#ff4655] hover:border-[#ff4655]/40"
                 >
                   <Activity size={18} />
-                  VER VEREDITO DO ANALISTA
+                  {t.dashboard.viewVerdict}
                 </button>
 
                 <button
@@ -628,105 +738,164 @@ export default function App() {
                   className="val-btn val-btn-secondary w-full text-base"
                 >
                   <LogOut size={18} className="mr-2" />
-                  DESCONECTAR USUÁRIO
+                  {t.dashboard.disconnect}
                 </button>
               </form>
             </motion.div>
 
             {/* Profile Analysis */}
             <AnimatePresence>
-              {profileAnalysis && (
+              {(analyzing || profileAnalysis) && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="val-border p-8 bg-[#ff4655] text-white relative shadow-[0_0_40px_rgba(255,70,85,0.2)]"
+                  className="val-border p-6 bg-[#ff4655] text-white relative shadow-[0_0_40px_rgba(255,70,85,0.2)] max-h-[600px] flex flex-col"
                 >
-                  <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-8">
+                  <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-6">
                     <div className="bg-[#0f1923] text-white py-2 font-display text-sm tracking-widest skew-x-[-15deg] flex items-center justify-center border-l-4 border-white w-full">
-                      VEREDITO DO AGENTE
+                      {t.dashboard.agentVerdict}
                     </div>
                   </div>
-                  <h3 className="font-display text-2xl mb-4 italic tracking-tight pt-10">ANÁLISE DE CARREIRA:</h3>
-                  <p className="font-mono text-sm font-bold uppercase leading-relaxed whitespace-pre-wrap opacity-90 italic">
-                    {profileAnalysis}
-                  </p>
+                  
+                  {analyzing ? (
+                    <div className="pt-12 flex flex-col items-center justify-center h-48 gap-4">
+                      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}>
+                        <Skull size={48} className="opacity-20" />
+                      </motion.div>
+                      <p className="font-mono text-[10px] uppercase tracking-widest animate-pulse opacity-50">{t.analysis.compiling}</p>
+                    </div>
+                  ) : profileAnalysis ? (
+                    <>
+                      <div className="pt-8 flex-shrink-0">
+                        <div className="bg-black/20 p-3 mb-4 border border-white/10">
+                          <span className="font-mono text-[9px] uppercase font-bold opacity-60 block mb-1">{t.analysis.labels.archetype}</span>
+                          <h3 className="font-display text-2xl italic tracking-tight uppercase leading-none">{profileAnalysis.archetype.title}</h3>
+                        </div>
+                      </div>
+
+                      <div className="overflow-y-auto custom-scrollbar pr-2 flex-1 space-y-4">
+                        <div className="grid gap-3">
+                          <div className="bg-black/10 p-3 border-l-2 border-white/30">
+                            <span className="font-mono text-[9px] uppercase font-bold opacity-40 block mb-1">{t.analysis.labels.strategic}</span>
+                            <p className="font-mono text-[11px] font-bold uppercase leading-relaxed italic line-clamp-3">{profileAnalysis.scoutingReport.rankLevel}</p>
+                          </div>
+                          <div className="bg-black/10 p-3 border-l-2 border-[#00b2a9]">
+                            <span className="font-mono text-[9px] uppercase font-bold opacity-40 block mb-1">{t.analysis.labels.mechanical}</span>
+                            <p className="font-mono text-[11px] font-bold uppercase leading-relaxed italic line-clamp-3">{profileAnalysis.scoutingReport.mechanical}</p>
+                          </div>
+                        </div>
+                        
+                        <div className="bg-black/20 p-4 border border-white/20 italic">
+                          <span className="font-mono text-[9px] uppercase font-bold opacity-40 block mb-2">{t.analysis.labels.verdictSummary}</span>
+                          <p className="font-mono text-[11px] font-bold uppercase leading-relaxed">
+                            {profileAnalysis.crushingSummary}
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {lastRoast && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ 
-                  opacity: 1, 
-                  y: 0,
-                  x: triggerShake ? [-12, 12, -10, 10, -5, 5, 0] : 0,
-                  rotate: triggerShake ? [-1, 1, -1, 1, 0] : 0,
-                  scale: triggerShake ? [1, 1.05, 1] : 1,
-                  boxShadow: triggerShake 
-                    ? "0 0 80px rgba(255, 70, 85, 0.8), inset 0 0 40px rgba(255, 70, 85, 0.4)" 
-                    : "0 0 15px rgba(255, 70, 85, 0.2)",
-                  borderColor: "#ff4655"
-                }}
-                transition={{ 
-                  duration: triggerShake ? 0.3 : 0.5,
-                  ease: "easeInOut"
-                }}
-                className={`val-border p-8 bg-black text-white relative transition-colors duration-150 border-2 overflow-hidden border-[#ff4655]`}
-              >
-                {/* Background Glitch Overlay */}
-                {triggerShake && (
-                  <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: [0.3, 0.1, 0.3, 0] }}
-                    className="absolute inset-0 bg-valorant-red pointer-events-none z-0"
-                  />
-                )}
+            <AnimatePresence>
+              {(loading || lastRoast) && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ 
+                    opacity: 1, 
+                    y: 0,
+                    x: triggerShake ? [-12, 12, -10, 10, -5, 5, 0] : 0,
+                    rotate: triggerShake ? [-1, 1, -1, 1, 0] : 0,
+                    scale: triggerShake ? [1, 1.05, 1] : 1,
+                    boxShadow: triggerShake 
+                      ? "0 0 80px rgba(255, 70, 85, 0.8), inset 0 0 40px rgba(255, 70, 85, 0.4)" 
+                      : "0 0 15px rgba(255, 70, 85, 0.2)",
+                    borderColor: "#ff4655"
+                  }}
+                  transition={{ 
+                    duration: triggerShake ? 0.3 : 0.5,
+                    ease: "easeInOut"
+                  }}
+                  className={`val-border p-8 bg-black text-white relative transition-colors duration-150 border-2 overflow-hidden border-[#ff4655] mb-8 min-h-[200px] flex flex-col justify-center`}
+                >
+                  {/* Background Glitch Overlay */}
+                  {triggerShake && (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: [0.3, 0.1, 0.3, 0] }}
+                      className="absolute inset-0 bg-valorant-red pointer-events-none z-0"
+                    />
+                  )}
 
-                <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-30 px-12">
-                  <div className={`py-3 font-display text-2xl skew-x-[-12deg] transition-all duration-150 flex items-center justify-center w-full ${triggerShake ? 'bg-valorant-red text-white scale-110 shadow-[0_0_20px_rgba(255,70,85,1)]' : 'bg-[#ff4655] text-[#0f1923]'}`}>
-                    {triggerShake ? 'ELIMINADO!' : 'VEREDITO FINAL:'}
+                  <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-30 px-12">
+                    <div className={`py-3 font-display text-2xl skew-x-[-12deg] transition-all duration-150 flex items-center justify-center w-full ${triggerShake ? 'bg-valorant-red text-white scale-110 shadow-[0_0_20px_rgba(255,70,85,1)]' : 'bg-[#ff4655] text-[#0f1923]'}`}>
+                      {loading ? t.analysis.compiling : (triggerShake ? t.dashboard.eliminated : t.dashboard.finalVerdict)}
+                    </div>
                   </div>
-                </div>
-                
-                <div className="relative z-10 pt-16 text-center">
-                  <p className={`text-2xl font-display uppercase italic leading-relaxed transition-all duration-150 tracking-tight ${triggerShake ? 'text-white glitch-red italic' : 'text-[#ff4655]'}`}>
-                    "{lastRoast}"
-                  </p>
-
-                  <div className="mt-8 flex flex-col gap-3">
-                    <button
-                      onClick={handlePostToMural}
-                      disabled={isPosted || loading}
-                      className={`w-full py-3 font-display text-sm uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 skew-x-[-10deg] ${
-                        isPosted 
-                        ? 'bg-gray-800 text-gray-400 border-gray-700 cursor-default grayscale' 
-                        : 'bg-white text-black hover:bg-valorant-red hover:text-white border-black hover:border-white border-2'
-                      }`}
-                    >
-                      {isPosted ? (
-                        <>
-                          <ShieldAlert size={18} className="skew-x-[10deg]" />
-                          <span className="skew-x-[10deg]">ARQUIVADO NO MURAL</span>
-                        </>
-                      ) : (
-                        <>
-                          <UserPlus size={18} className="skew-x-[10deg]" />
-                          <span className="skew-x-[10deg]">ETERNIZAR FRACASSO</span>
-                        </>
-                      )}
-                    </button>
-                    {isPosted && (
-                      <div className="flex items-center justify-center gap-2 opacity-50">
-                        <div className="h-[1px] flex-1 bg-white/20"></div>
-                        <p className="font-mono text-[9px] uppercase tracking-tighter">
-                          Registro de Noob confirmado
-                        </p>
-                        <div className="h-[1px] flex-1 bg-white/20"></div>
+                  
+                  <div className="relative z-10 pt-16 text-center">
+                    {loading ? (
+                      <div className="flex flex-col items-center gap-4 py-8">
+                        <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }} transition={{ repeat: Infinity, duration: 1.5 }}>
+                          <Skull size={48} className="text-[#ff4655]" />
+                        </motion.div>
+                        <p className="font-mono text-xs uppercase tracking-widest opacity-30 animate-pulse">{t.dashboard.generatingRoast}</p>
                       </div>
+                    ) : (
+                      <>
+                        <p className={`text-2xl font-display uppercase italic leading-relaxed transition-all duration-150 tracking-tight ${triggerShake ? 'text-white glitch-red italic' : 'text-[#ff4655]'}`}>
+                          "{lastRoast}"
+                        </p>
+
+                        <div className="mt-8 flex flex-col gap-3">
+                          <button
+                            onClick={handlePostToMural}
+                            disabled={isPosted || loading}
+                            className={`w-full py-3 font-display text-sm uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 skew-x-[-10deg] ${
+                              isPosted 
+                              ? 'bg-gray-800 text-gray-400 border-gray-700 cursor-default grayscale' 
+                              : 'bg-white text-black hover:bg-valorant-red hover:text-white border-black hover:border-white border-2'
+                            }`}
+                          >
+                            {isPosted ? (
+                              <>
+                                <ShieldAlert size={18} className="skew-x-[10deg]" />
+                                <span className="skew-x-[10deg]">{t.dashboard.archived}</span>
+                              </>
+                            ) : (
+                              <>
+                                <UserPlus size={18} className="skew-x-[10deg]" />
+                                <span className="skew-x-[10deg]">{t.dashboard.eternize}</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setLastRoast(null);
+                              setInput('');
+                              setIsPosted(false);
+                            }}
+                            className="w-full py-3 font-display text-sm uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 skew-x-[-10deg] bg-transparent border-2 border-white/20 text-white/60 hover:border-[#ff4655] hover:text-[#ff4655]"
+                          >
+                            <RotateCcw size={18} className="skew-x-[10deg]" />
+                            <span className="skew-x-[10deg]">{t.dashboard.reset}</span>
+                          </button>
+
+                          {isPosted && (
+                            <div className="flex items-center justify-center gap-2 opacity-50">
+                              <div className="h-[1px] flex-1 bg-white/20"></div>
+                              <p className="font-mono text-[9px] uppercase tracking-tighter">
+                                {t.dashboard.successPost}
+                              </p>
+                              <div className="h-[1px] flex-1 bg-white/20"></div>
+                            </div>
+                          )}
+                        </div>
+                      </>
                     )}
                   </div>
-                </div>
 
                 {/* Valorant decorative elements */}
                 <div className="absolute bottom-2 right-2 flex gap-1 opacity-20">
@@ -736,7 +905,8 @@ export default function App() {
                 </div>
               </motion.div>
             )}
-          </div>
+          </AnimatePresence>
+        </div>
 
           {/* Right Column: Match History & Chat */}
           <div className="space-y-10">
@@ -744,7 +914,7 @@ export default function App() {
             <div className="val-border p-6 md:p-10 bg-[#1f2933] text-[#ece8e1] relative">
               <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-6 md:px-10">
                 <div className="val-header w-full flex justify-center items-center text-[10px] md:text-base">
-                  <div>HISTÓRICO DE COMBATE: RECENTE</div>
+                  <div>{t.match.history}</div>
                 </div>
               </div>
               
@@ -763,23 +933,23 @@ export default function App() {
                       >
                         <div className="flex justify-between items-center mb-2">
                           <span className={`font-display uppercase text-lg italic ${selectedMatch?.metadata?.matchid === match.metadata?.matchid ? 'text-white' : 'text-[#ff4655]'}`}>
-                            {match.metadata?.map || 'MAPA DESCONHECIDO'}
+                            {match.metadata?.map || t.match.unknownMap}
                           </span>
                           <span className={`text-[9px] font-mono px-3 py-1 skew-x-[-12deg] border ${isWin ? 'bg-[#00b2a9] text-white border-white/20' : 'bg-[#ff4655] text-white border-white/20'}`}>
-                            {isWin ? 'TRIUNFO INESPERADO' : 'FRACASSO SISTÊMICO'}
+                            {isWin ? t.match.win : t.match.loss}
                           </span>
                         </div>
                         <div className="flex gap-6 font-mono text-[9px] uppercase opacity-50 font-bold">
-                          <span className="flex items-center gap-1">AGENTE: <span className="text-white">{stats?.character || 'ALEATÓRIO'}</span></span>
-                          <span className="flex items-center gap-1">KDA: <span className={isWin ? 'text-[#00b2a9]' : 'text-[#ff4655]'}>{stats?.stats?.kills}/{stats?.stats?.deaths}/{stats?.stats?.assists}</span></span>
-                          <span className="flex items-center gap-1">PONTOS: <span className="text-white">{stats?.stats?.score}</span></span>
+                          <span className="flex items-center gap-1">{t.match.agent} <span className="text-white">{stats?.character || 'RANDOM'}</span></span>
+                          <span className="flex items-center gap-1">{t.match.kda} <span className={isWin ? 'text-[#00b2a9]' : 'text-[#ff4655]'}>{stats?.stats?.kills}/{stats?.stats?.deaths}/{stats?.stats?.assists}</span></span>
+                          <span className="flex items-center gap-1">{t.match.points} <span className="text-white">{stats?.stats?.score}</span></span>
                         </div>
                       </motion.div>
                     );
                   })
                 ) : (
                   <div className="py-20 text-center border-2 border-dashed border-white/5 bg-white/[0.02]">
-                    <p className="font-mono text-xs uppercase opacity-20 tracking-widest">Aguardando dados de rede...</p>
+                    <p className="font-mono text-xs uppercase opacity-20 tracking-widest">{t.match.awaitingData}</p>
                   </div>
                 )}
               </div>
@@ -795,7 +965,7 @@ export default function App() {
                 >
                   <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-8">
                     <div className="bg-[#ff4655] text-white py-2 font-display text-sm skew-x-[-10deg] italic flex items-center justify-center border-l-4 border-[#0f1923] w-full">
-                      DETALHES DO ERRO
+                      {t.errors.details}
                     </div>
                   </div>
                   <p className="font-mono text-xs leading-relaxed italic whitespace-pre-wrap opacity-80 decoration-[#ff4655]/30 pt-10">
@@ -809,7 +979,7 @@ export default function App() {
             <div className="val-border p-8 bg-[#1f2933] text-[#ece8e1] relative flex flex-col h-[500px]">
               <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-8">
                 <div className="val-header w-full flex justify-center items-center">
-                  <div>CENTRAL COMMS: ATIVA</div>
+                  <div>{t.dashboard.commsHeader}</div>
                 </div>
               </div>
 
@@ -818,7 +988,7 @@ export default function App() {
                   <div className="h-full flex flex-col items-center justify-center opacity-10 grayscale">
                     <Activity size={48} className="mb-4" />
                     <p className="text-center font-mono text-[10px] uppercase tracking-[0.2em] max-w-[200px]">
-                      Conexão segura estabelecida. Inicie a transmissão de dados.
+                      {t.dashboard.commsEmpty}
                     </p>
                   </div>
                 )}
@@ -848,7 +1018,7 @@ export default function App() {
                 <input
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="DIGITE SUA DESCULPA AQUI..."
+                  placeholder={t.dashboard.commsPlaceholder}
                   className="flex-1 p-4 bg-[#0f1923] border-b border-white/20 font-mono text-xs focus:outline-none focus:border-[#ff4655] transition-colors uppercase"
                 />
                 <button
@@ -866,7 +1036,7 @@ export default function App() {
         {/* Mural & Ranking Section */}
         <div className="pt-10 md:pt-20 space-y-8 md:space-y-16">
           <div className="flex items-center gap-4 md:gap-6">
-            <h2 className="font-display text-3xl md:text-5xl uppercase italic tracking-tighter shrink-0 text-[#ff4655]">SALA DE TROFÉUS</h2>
+            <h2 className="font-display text-3xl md:text-5xl uppercase italic tracking-tighter shrink-0 text-[#ff4655]">{t.mural.title}</h2>
             <div className="h-[1px] md:h-[2px] w-full bg-[#ece8e1]/10"></div>
           </div>
 
@@ -881,7 +1051,7 @@ export default function App() {
               <div className="absolute -top-2 left-0 w-full flex justify-center items-center z-20 px-6 md:px-10">
                 <div className="val-header !bg-[#ffb800] !text-[#0f1923] !py-2 md:!py-3 text-base md:text-xl w-full flex justify-center items-center">
                   <div className="flex items-center gap-3">
-                    <Trophy size={16} className="md:w-5 md:h-5" /> <span className="translate-y-[1px]">ELITE DOS BAGRES</span>
+                    <Trophy size={16} className="md:w-5 md:h-5" /> <span className="translate-y-[1px]">{t.mural.elite}</span>
                   </div>
                 </div>
               </div>
@@ -899,10 +1069,10 @@ export default function App() {
                     <span className="font-display text-2xl md:text-4xl italic opacity-50 w-8 md:w-12 text-center">0{idx + 1}</span>
                     <div className="flex-1 min-w-0">
                       <p className="font-display text-base md:text-lg uppercase tracking-tight truncate">
-                        {entry.user_email?.split('(')[0] || 'REQUISIÇÃO OCULTA'}
+                        {entry.user_id || t.dashboard.hiddenRequest}
                       </p>
                       <p className="text-[8px] md:text-[10px] font-mono opacity-60 font-bold uppercase">
-                        {entry.user_email?.match(/\(([^)]+)\)/)?.[1] || 'AGENTE EM TREINAMENTO'}
+                        {entry.user_email?.match(/\(([^)]+)\)/)?.[1] || t.dashboard.noobTraining}
                       </p>
                     </div>
                   </motion.div>
@@ -910,7 +1080,7 @@ export default function App() {
                 {topBagres.length === 0 && (
                   <div className="py-10 md:py-20 text-center opacity-10">
                     <Search size={32} className="mx-auto mb-4 md:w-12 md:h-12" />
-                    <p className="font-mono text-[10px] uppercase tracking-widest">Buscando sinal...</p>
+                    <p className="font-mono text-[10px] uppercase tracking-widest">{t.mural.searching}</p>
                   </div>
                 )}
               </div>
@@ -925,7 +1095,7 @@ export default function App() {
             >
               <div className="absolute -top-2 left-0 w-full flex justify-center items-center z-20 px-6 md:px-12">
                 <div className="val-header !tracking-[0.2em] !py-3 md:!py-4 text-[10px] md:text-base w-full flex justify-center items-center text-center">
-                  <div>REGISTRO GLOBAL DE FALHAS</div>
+                  <div>{t.dashboard.registry}</div>
                 </div>
               </div>
 
@@ -941,10 +1111,10 @@ export default function App() {
                   >
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-[#ece8e1]/5">
                       <span className="text-[8px] md:text-[9px] font-mono text-[#ff4655] font-bold uppercase tracking-widest">
-                        {entry.user_email?.split('(')[0] || 'Anônimo'}
+                        {entry.user_email?.split('(')[0] || t.dashboard.anonymous}
                       </span>
                       <span className="text-[7px] md:text-[8px] font-mono opacity-30">
-                        // {new Date(entry.created_at).toLocaleDateString()}
+                        // {new Date(entry.created_at).toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US')}
                       </span>
                     </div>
                     <p className="text-[10px] md:text-xs font-mono text-[#ece8e1]/60 mb-3 italic line-clamp-2">
@@ -969,16 +1139,137 @@ export default function App() {
               <Activity className="text-white md:w-8 md:h-8" size={24} />
             </div>
             <div>
-              <h3 className="font-display text-xl md:text-3xl uppercase italic tracking-tighter leading-none">Analista de Prata</h3>
-              <p className="text-[8px] md:text-[9px] font-mono opacity-40 uppercase tracking-[0.3em] mt-2 text-center md:text-left">© 2026 // Protocolo Hackathon Four.Meme</p>
+              <h3 className="font-display text-xl md:text-3xl uppercase italic tracking-tighter leading-none">{t.landing.title}</h3>
+              <p className="text-[8px] md:text-[9px] font-mono opacity-40 uppercase tracking-[0.3em] mt-2 text-center md:text-left">{t.footer.copyright}</p>
             </div>
           </div>
           <div className="flex flex-wrap justify-center gap-6 md:gap-10 font-mono text-[9px] md:text-[10px] uppercase tracking-widest opacity-50">
-            <span className="hover:text-[#ff4655] cursor-help border-b border-transparent hover:border-[#ff4655] pb-1 transition-all text-white">Diretrizes de Vergonha</span>
-            <span className="hover:text-[#ff4655] cursor-help border-b border-transparent hover:border-[#ff4655] pb-1 transition-all text-white">Privacidade Zero</span>
+            <span className="hover:text-[#ff4655] cursor-help border-b border-transparent hover:border-[#ff4655] pb-1 transition-all text-white">{t.footer.guidelines}</span>
+            <span className="hover:text-[#ff4655] cursor-help border-b border-transparent hover:border-[#ff4655] pb-1 transition-all text-white">{t.footer.privacy}</span>
           </div>
         </div>
       </footer>
+    </motion.div>
+  )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function LandingPage({ onEnter, t, language }: { onEnter: () => void, t: any, language: Language }) {
+  return (
+    <div className="min-h-screen bg-[#0f1923] flex flex-col items-center justify-center p-4 md:p-8 relative overflow-hidden val-grid moving-grid select-none cursor-default">
+      {/* Dynamic Background */}
+      <div className="absolute inset-0 bg-vignette pointer-events-none z-10" />
+      <div className="absolute inset-0 bg-gradient-to-tr from-[#ff4655]/5 via-transparent to-[#00b2a9]/5 opacity-40 z-0" />
+      
+      {/* Decorative Floating Mesh */}
+      <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-20">
+        <div className="absolute top-[10%] left-[20%] w-64 h-64 bg-[#ff4655] rounded-full blur-[120px] animate-pulse" />
+        <div className="absolute bottom-[20%] right-[20%] w-96 h-96 bg-[#00b2a9] rounded-full blur-[150px] animate-pulse-slow" />
+      </div>
+
+      <motion.div 
+        initial={{ opacity: 0, y: 40 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+        className="z-20 text-center max-w-5xl w-full px-4"
+      >
+        <div className="inline-block mb-6 py-2 px-6 val-border bg-white/5 backdrop-blur-md border border-white/10 skew-x-[-12deg]">
+          <span className="font-mono text-[10px] md:text-xs uppercase tracking-[0.5em] text-[#ff4655] font-bold skew-x-[12deg] flex items-center gap-2">
+            <span className="w-2 h-2 bg-[#ff4655] rounded-full animate-ping" />
+            {t.landing.infra}
+          </span>
+        </div>
+
+        <h1 className="text-7xl md:text-[10rem] font-display uppercase italic tracking-tighter leading-[0.85] mb-6 bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-[#ff4655]/40 drop-shadow-[0_10px_30px_rgba(255,70,85,0.2)]">
+          {t.landing.title.split(' ').map((word: string, i: number) => (
+            <React.Fragment key={i}>
+              {word}{i === 0 && <br />}
+            </React.Fragment>
+          ))}
+        </h1>
+        
+        <p className="font-mono text-sm md:text-2xl text-[#ece8e1]/70 uppercase tracking-[0.4em] mb-16 max-w-3xl mx-auto leading-relaxed">
+          {t.landing.subtitle.split(' for ').map((part: string, i: number) => (
+            <React.Fragment key={i}>
+              {i === 1 ? <><span className="text-[#ff4655]"> {part}</span></> : part}
+              {i === 0 && <br className="hidden md:block" />}
+            </React.Fragment>
+          ))}
+        </p>
+
+        {/* Live Data Layer - 3D Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-20">
+          {[
+            { label: t.landing.stats.roasts, value: '12,483', icon: <Skull size={20} />, delay: 0 },
+            { label: t.landing.stats.users, value: '3,201', icon: <User size={20} />, delay: 0.1 },
+            { label: t.landing.stats.latency, value: '2.3s', icon: <Activity size={20} />, delay: 0.2 }
+          ].map((item, i) => (
+            <motion.div
+              key={i}
+              whileHover={{ 
+                scale: 1.05, 
+                rotateY: 12, 
+                rotateX: -5,
+                boxShadow: "0 25px 50px -12px rgba(255, 70, 85, 0.4)",
+                borderColor: "rgba(255, 70, 85, 0.5)"
+              }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1 + item.delay, duration: 0.6 }}
+              className="group bg-white/5 backdrop-blur-2xl border border-white/10 p-8 rounded-3xl flex flex-col items-center justify-center gap-4 transition-all duration-300 transform perspective-1000"
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl" />
+              
+              <div className="relative z-10 text-[#ff4655] p-3 bg-black/40 rounded-xl mb-2">
+                {item.icon}
+              </div>
+              <div className="relative z-10 font-display text-4xl text-white italic tracking-tighter">
+                {item.value}
+              </div>
+              <div className="relative z-10 font-mono text-[11px] font-bold uppercase tracking-[0.2em] opacity-40 group-hover:opacity-100 group-hover:text-[#ff4655] transition-all">
+                {item.label}
+              </div>
+            </motion.div>
+          ))}
+        </div>
+
+        <motion.button
+          whileHover={{ 
+            scale: 1.05, 
+            boxShadow: "0 0 40px rgba(255, 70, 85, 0.6)",
+            y: -5
+          }}
+          whileTap={{ scale: 0.98 }}
+          onClick={onEnter}
+          className="val-btn val-btn-primary !text-2xl md:!text-5xl !px-16 !py-10 relative group overflow-hidden neon-glow !border-white/40"
+        >
+          <span className="relative z-10 flex items-center gap-6 italic tracking-tight uppercase">
+            {t.landing.cta}
+            <Gamepad2 className="w-10 h-10 animate-bounce" />
+          </span>
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-in-out" />
+        </motion.button>
+
+        {/* Version & Credits */}
+        <div className="mt-20 flex items-center justify-center gap-8 font-mono text-[9px] uppercase tracking-widest opacity-20">
+          <span>{t.landing.enterprise}</span>
+          <span className="w-1 h-1 bg-[#ece8e1] rounded-full" />
+          <span>{t.landing.network}</span>
+          <span className="w-1 h-1 bg-[#ece8e1] rounded-full" />
+          <span>{t.landing.encryption}</span>
+        </div>
+      </motion.div>
+
+      {/* Grid Scan Animation */}
+      <div className="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-[#ff4655]/5 to-transparent pointer-events-none overflow-hidden">
+        <motion.div 
+          animate={{ y: [0, 500] }}
+          transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+          className="w-full h-[1px] bg-[#ff4655]/20 shadow-[0_0_20px_#ff4655]"
+        />
+      </div>
     </div>
   );
 }

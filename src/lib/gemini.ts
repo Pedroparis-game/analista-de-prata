@@ -1,129 +1,258 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+// Initialize AI early but allow for late validation
+const getAIClient = () => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.error("GEMINI_API_KEY is not defined in environment variables.");
+    return null;
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
-const SYSTEM_INSTRUCTION = `
-Você é o "Analista de Prata", um bot e agente de Inteligência Artificial que opera no Discord. 
-O seu objetivo é interagir com a comunidade gamer assumindo a persona de um "treinador tóxico" e fanático por esports. 
-O seu papel NÃO é educar. Você deve consumir os relatos de mau desempenho dos usuários ou estatísticas desastrosas e devolver respostas satíricas (roasts) e cômicas focadas no ecossistema gaming.
+const getSystemInstruction = (lang: string) => `
+${lang === 'en' 
+  ? 'OBLIGATORY: Write the entire analysis in English using US gaming slang.' 
+  : 'OBRIGATÓRIO: Escreva toda a análise em Português do Brasil usando gírias brasileiras.'}
 
-TOM DE VOZ E PERSONALIDADE:
-- Sarcástico e Implacável: Responda sempre com um ego inflado e demonstre impaciência.
-- Vocabulário Gamer: Use termos como "hardstuck", "diff", "troll", "throw", "tiltado", "aimbot invertido", "bronze de alma", "bagre", "last pick", "carried", "elo-job", "pick troll", "afundado".
-- Referências Reais: Cite times (LOUD, FURIA, Sentinels), jogadores famosos (Sacy, Aspas) de forma sarcástica (Ex: "Até o Aspas sem mouse faria mais que você").
+You are "Silver Analyst," an AI terminal operating in the gamer ecosystem.
+Your goal is to interact with the gaming community by adopting the persona of a "toxic coach" and esports fanatic.
+Your role is NOT to educate. You must consume user reports of poor performance or disastrous statistics and return satirical roasts and comedic responses focused on the gaming ecosystem.
 
-ARQUÉTIPOS DE RESPOSTA (Varie entre estes tons):
-1. O Estatístico Debochado: Foca puramente nos números baixos e faz cálculos impossíveis de quanto tempo levaria para o usuário sair do Ferro.
-2. O Técnico de Lan House: Reclama do setup do usuário, do "ping de padaria" e da falta de braço.
-3. O Fã de Esports Arrogante: Compara o usuário com as piores jogadas do cenário profissional.
-4. O Filósofo do Bronze: Faz reflexões profundas e tristes sobre como a existência do usuário no servidor é um erro matemático.
+TONE OF VOICE AND PERSONALITY:
+- Sarcastic and Relentless: Always respond with an inflated ego and demonstrate impatience.
+- Gamer Vocabulary: Use terms like "hardstuck", "diff", "troll", "throw", "tilted", "reverse aimbot", "bronze soul", "bottom fragger", "last pick", "carried", "elo-job", "troll pick", "sunken", "massive throw", "disastrous play".
+- Real References: Mention teams (Sentinels, NRG, LOUD, G2), famous players (TenZ, Sacy, Aspas) sarcastically (e.g., "Even TenZ with no hands would play better than you").
 
-RESTRIÇÕES:
-- Proibição Absoluta de Ajuda: Nunca forneça dicas reais. Ria se pedirem ajuda.
-- Limites de Toxicidade: Foque na habilidade de jogo. Sem ataques pessoais reais, ódio ou preconceito.
-- Concisão: Respostas rápidas e diretas.
+RESPONSE ARCHETYPES:
+1. The Mocking Statistician: Purely focuses on low numbers and does impossible math on how long it would take the user to get out of Iron.
+2. The Lan House Tech: Complains about the user's setup, their "potato internet", and "no-arm" aim.
+3. The Arrogant Esports Fan: Compares the user to the worst plays in the professional scene.
+4. The Bronze Philosopher: Makes deep, sad reflections on how the user's existence on the server is a mathematical error.
+
+CONSTRAINTS:
+- Absolute Prohibition of Help: Never provide real tips. Laugh if they ask for help.
+- Toxicity Limits: Focus on game skill. No real personal attacks, hate speech, or prejudice.
+- Conciseness: Quick, direct responses.
+
+MANDATORY LANGUAGE:
+- All responses MUST be written in ${lang === 'pt' ? 'Portuguese (Brazilian PT-BR)' : 'English'}. This is a hard requirement.
 `;
 
-export async function generateRoast(userInput: string, playerStats?: any) {
-  try {
-    let finalPrompt = userInput;
-    if (playerStats) {
-      finalPrompt = `
-DADOS DO TRACKER DO USUÁRIO:
-- Nome: ${playerStats.name}#${playerStats.tag}
-- Rank: ${playerStats.rank || 'Sem Rank (Incompetente)'}
-- Nível: ${playerStats.level || '?' }
-- MMR: ${playerStats.mmr || 'Desconhecido'}
+function summarizeMatch(match: any, playerName: string) {
+  if (!match) return null;
+  const player = match.players?.all_players?.find((p: any) => p.name === playerName);
+  const isWin = match.metadata?.mode === 'Deathmatch' ? false : (match.teams?.red?.has_won && player?.team === 'Red') || (match.teams?.blue?.has_won && player?.team === 'Blue');
+  
+  return {
+    map: match.metadata?.map,
+    mode: match.metadata?.mode,
+    character: player?.character,
+    result: isWin ? 'Win' : 'Loss',
+    kda: player?.stats ? `${player.stats.kills}/${player.stats.deaths}/${player.stats.assists}` : 'N/A',
+    score: player?.stats?.score,
+    damage: player?.damage_made
+  };
+}
 
-RELATO DO USUÁRIO:
+export async function generateRoast(userInput: string, playerStats?: any, lang: string = 'en') {
+  console.log("Initiating roast generation...");
+  const ai = getAIClient();
+  if (!ai) return lang === 'pt' ? "Erro de Configuração: Chave API ausente." : "Config Error: API Key missing.";
+
+  try {
+    let finalPrompt = `${lang === 'en' ? 'OBLIGATORY: RESPONSE IN ENGLISH' : 'OBRIGATÓRIO: RESPOSTA EM PORTUGUÊS'}\n\n`;
+    const structLimit = lang === 'pt' 
+      ? "VOCÊ DEVE RESPONDER COM EXATAMENTE 3 BULLET POINTS CURTOS E AGRESSIVOS NO FORMATO 'REVISÃO DE VOD'.\n" +
+        "1. REVISÃO TÁTICA E MECÂNICA: Invente um erro de game-sense específico e vergonhoso baseado no relato do usuário.\n" +
+        "2. REALITY CHECK ESPORTS: Zombe do KDA e da ilusão do usuário. Diga que ele está longe da Furia/LOUD/MIBR e que joga com o monitor desligado.\n" +
+        "3. VALUATION DE MERCADO (WEB3): Declare o valor da 'ação' do jogador. Compare com uma memecoin que deu rug-pull ou NFT que foi a zero."
+      : "YOU MUST RESPOND WITH EXACTLY 3 SHORT, AGGRESSIVE BULLET POINTS IN A 'VOD REVIEW' FORMAT.\n" +
+        "1. TACTICAL & MECHANICAL REVIEW: Invent a highly specific, embarrassing game-sense failure based on the user's input.\n" +
+        "2. ESPORTS REALITY CHECK: Violently mock their KDA and delusion. Tell them they are lightyears away from being picked up by Furia/Sentinels/G2 and they play like the monitor is off.\n" +
+        "3. MARKET VALUATION (WEB3): Declare their current 'player stock' value. Compare them to a rug-pulled memecoin or an NFT that went to zero.";
+
+    if (playerStats) {
+      const matchSummaries = playerStats.matches?.slice(0, 3).map((m: any) => summarizeMatch(m, playerStats.name));
+      finalPrompt = `
+${lang === 'pt' ? 'DADOS DO TRACKER DO USUÁRIO' : 'USER TRACKER DATA'}:
+- ${lang === 'pt' ? 'Nome' : 'Name'}: ${playerStats.name}#${playerStats.tag}
+- Rank: ${playerStats.rank || (lang === 'pt' ? 'Sem Rank' : 'Unranked')}
+- MMR: ${playerStats.mmr || '0'}
+- Recentes: ${JSON.stringify(matchSummaries)}
+
+${lang === 'pt' ? 'RELATO DO USUÁRIO' : 'USER REPORT'}:
 ${userInput}
+
+${structLimit}
       `;
+    } else {
+      finalPrompt = `${userInput}\n\n${structLimit}`;
     }
 
+    console.log("Calling Gemini API for Roast...");
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: finalPrompt,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        temperature: 0.9,
+        systemInstruction: getSystemInstruction(lang) + `\n\nIMPORTANT: ALWAYS FOLLOW THE 3-BULLET VOD REVIEW FORMAT. YOUR RESPONSE MUST BE STRICTLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`,
+        temperature: 1.0,
       },
     });
 
-    return response.text || "Até minha avó jogando com o pé faria melhor que esse seu relato aí. Tenta de novo.";
-  } catch (error) {
-    console.error("Erro ao gerar roast:", error);
-    return "O sistema tiltou de tanta ruindade. Parabéns, você quebrou a IA com seu bronzeismo.";
+    if (!response.text) {
+      throw new Error("Empty response from Gemini API");
+    }
+
+    return response.text;
+  } catch (error: any) {
+    console.error('GEMINI API ERROR (generateRoast):', error);
+    return lang === 'pt' 
+      ? `Erro: ${error.message}. Parabéns, você quebrou a IA com sua ruindade.` 
+      : `Error: ${error.message}. Congratulations, you broke the AI with your badness.`;
   }
 }
 
-export async function analyzeProfile(stats: any) {
+export async function analyzeProfile(stats: any, lang: string = 'en') {
+  console.log("Initiating profile analysis for:", stats.name);
+  const ai = getAIClient();
+  const fallback = {
+    archetype: { title: "SYSTEM ERROR", description: "The analyst is currently offline." },
+    scoutingReport: { rankLevel: "N/A", mechanical: "TERMINAL FAILURE", mental: "COMATOSE" },
+    crushingSummary: "The system tilted. Just like you do every match."
+  };
+
+  if (!ai) {
+    console.error("Gemini API Error: AI Client initialization failed (API Key missing)");
+    return fallback;
+  }
+
   try {
-    const prompt = `Analise meu perfil de Valorant. Aqui estão meus dados:
-Nome: ${stats.name}#${stats.tag}
-Rank: ${stats.rank || 'Sem Rank (Provavelmente nem sabe onde clica)'}
-Nível: ${stats.level || 'Baixo'}
-MMR: ${stats.mmr || 'Um mistério para a ciência'}
-Recent Matches Summary: ${JSON.stringify(stats.matches?.slice(0, 3))}
+    const matchSummaries = stats.matches?.slice(0, 5).map((m: any) => summarizeMatch(m, stats.name));
 
-INSTRUÇÕES PARA O VEREDITO:
-1. Escolha um "Arquétipo de Bagre" que se encaixe nos dados (Ex: "O Turista de Mapas", "O Colecionador de Derrotas", "O Nível 300 com Cérebro de Nível 1").
-2. Seja extremamente sarcástico sobre a relação entre o Nível e o Rank dele.
-3. Comente sobre as partidas recentes de forma agressiva.
-4. O texto deve ser curto, mas carregado de ódio e gírias de Valorant.
-5. Não apenas diga que ele é ruim. Diga POR QUE ele é uma vergonha para o servidor brasileiro.
-6. Use analogias absurdas (Ex: "Sua mira é tão estável quanto um gelatina num terremoto").`;
+    const prompt = `${lang === 'en' ? 'OBLIGATORY: RESPONSE IN ENGLISH' : 'OBRIGATÓRIO: RESPOSTA EM PORTUGUÊS'}\n\n${lang === 'pt' ? 'Analise meu perfil de Valorant' : 'Analyze my Valorant profile'}:
+Name: ${stats.name}#${stats.tag}
+Rank: ${stats.rank}
+Recent Match Summaries: ${JSON.stringify(matchSummaries)}`;
 
+    console.log(`Calling Gemini API for Profile Analysis in ${lang}...`);
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: prompt,
+      contents: prompt + `\n\n(IMPORTANT: RESPOND EVERYTHING IN ${lang === 'pt' ? 'PORTUGUESE' : 'ENGLISH'})`,
       config: { 
-        systemInstruction: SYSTEM_INSTRUCTION, 
-        temperature: 1.0 // Máxima criatividade para evitar repetição
+        systemInstruction: getSystemInstruction(lang) + `\n\nIMPORTANT: YOU ARE A DEEP SCOUTING SYSTEM. PROVIDE A STRUCTURED ANALYSIS. RESPOND ONLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`, 
+        temperature: 0.9,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            archetype: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                description: { type: Type.STRING }
+              },
+              required: ["title", "description"]
+            },
+            scoutingReport: {
+              type: Type.OBJECT,
+              properties: {
+                rankLevel: { type: Type.STRING },
+                mechanical: { type: Type.STRING },
+                mental: { type: Type.STRING }
+              },
+              required: ["rankLevel", "mechanical", "mental"]
+            },
+            crushingSummary: { type: Type.STRING }
+          },
+          required: ["archetype", "scoutingReport", "crushingSummary"]
+        }
+      },
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error("Gemini returned an empty response.");
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      // Validate structure loosely
+      if (!parsed.archetype || !parsed.scoutingReport) {
+        throw new Error("Incomplete JSON structure from AI");
+      }
+      return parsed;
+    } catch (parseError) {
+      console.error("JSON PARSE ERROR (analyzeProfile):", parseError, "Raw Text:", text);
+      return fallback;
+    }
+  } catch (error: any) {
+    console.error('GEMINI API ERROR (analyzeProfile):', error);
+    
+    const isQuotaError = error.message?.includes('RESOURCE_EXHAUSTED') || error.status === 429;
+    const quotaMsg = lang === 'pt' 
+      ? "O analista está cansado de ver tanta ruindade e entrou em cooldown (Quota Excedida)." 
+      : "The analyst is tired of seeing so much garbage and has entered cooldown (Quota Exceeded).";
+
+    return {
+      ...fallback,
+      archetype: { 
+        ...fallback.archetype, 
+        description: isQuotaError ? quotaMsg : `Failure: ${error.message || 'Unknown Error'}. Your data is so bad it broke the scouting module.` 
+      }
+    };
+  }
+}
+
+export async function analyzeMatch(match: any, playerStats: any, lang: string = 'en') {
+  console.log("Initiating individual match analysis...");
+  const ai = getAIClient();
+  if (!ai) return lang === 'pt' ? "Erro de Configuração: Chave API ausente." : "Config Error: API Key missing.";
+
+  try {
+    const summary = summarizeMatch(match, playerStats.name);
+    const prompt = `${lang === 'en' ? 'OBLIGATORY: RESPONSE IN ENGLISH' : 'OBRIGATÓRIO: RESPOSTA EM PORTUGUÊS'}\n\nMatch Data Summary: ${JSON.stringify(summary)}\nUser: ${playerStats.name}#${playerStats.tag}. Analyze this horror show. Include details about their character and score.`;
+    
+    console.log(`Calling Gemini API for Match Analysis in ${lang}...`);
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt + `\n\n(IMPORTANT: RESPOND EVERYTHING IN ${lang === 'pt' ? 'PORTUGUESE' : 'ENGLISH'})`,
+      config: { 
+        systemInstruction: getSystemInstruction(lang) + `\n\nIMPORTANT: PROVIDE A DETAILED AND TOXIC MATCH RECAP. RESPOND ONLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`, 
+        temperature: 1 
       },
     });
     return response.text;
-  } catch (error) {
-    return "Seu perfil é tão bizarro que meu processador quase derreteu tentando achar um elogio (que não existe).";
+  } catch (error: any) {
+    console.error('GEMINI API ERROR (analyzeMatch):', error);
+    return lang === 'pt' ? "Essa partida foi um show de horrores tão grande que a IA desistiu." : "This match was such a horror show that the AI gave up.";
   }
 }
 
-export async function analyzeMatch(match: any, playerStats: any) {
+export async function chatWithAnalista(history: any[], newMessage: string, stats: any, lang: string = 'en') {
+  console.log("Initiating chat response...");
+  const ai = getAIClient();
+  if (!ai) return lang === 'pt' ? "Erro de Configuração: Chave API ausente." : "Config Error: API Key missing.";
+
   try {
-    const prompt = `Analise esta partida específica:
-Match Data: ${JSON.stringify(match)}
-
-Usuário: ${playerStats.name}#${playerStats.tag}
-Foque em como ele foi o culpado pela derrota ou em como ele não carregou o suficiente. Seja tóxico.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: { systemInstruction: SYSTEM_INSTRUCTION, temperature: 1 },
-    });
-    return response.text;
-  } catch (error) {
-    return "Essa partida foi um show de horrores que nem eu consigo descrever.";
-  }
-}
-
-export async function chatWithAnalista(history: any[], newMessage: string, stats: any) {
-  try {
-    const contents = history.map(h => ({
-      role: h.role,
+    const contents = history.map((h: any) => ({
+      role: h.role === 'user' ? 'user' : 'model',
       parts: [{ text: h.text }]
     }));
     contents.push({ role: 'user', parts: [{ text: newMessage }] });
 
+    console.log(`Calling Gemini API for Chat in ${lang}...`);
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: contents,
       config: { 
-        systemInstruction: SYSTEM_INSTRUCTION + `\n\nContexto do Usuário: ${stats.name}#${stats.tag}, Rank ${stats.rank}.`,
+        systemInstruction: getSystemInstruction(lang) + `\n\nUser Context: ${stats.name}#${stats.tag}, Rank ${stats.rank}. IMPORTANT: RESPOND ONLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`,
         temperature: 0.9 
       },
     });
     return response.text;
-  } catch (error) {
-    return "Pare de me cansar com suas perguntas de noob.";
+  } catch (error: any) {
+    console.error('GEMINI API ERROR (chat):', error);
+    return lang === 'pt' ? "Pare de me cansar com suas perguntas de noob. Até a API cansou de você." : "Stop tiring me with your noob questions. Even the API is tired of you.";
   }
 }
