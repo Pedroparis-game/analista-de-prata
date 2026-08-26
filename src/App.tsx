@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Skull, Send, Trophy, Trash2, ShieldAlert, Gamepad2, LogIn, LogOut, UserPlus, Mail, Lock, User, Search, Activity, Languages, Zap, Brain, Target, Shield, AlertTriangle, RotateCcw } from 'lucide-react';
-import { generateRoast, analyzeProfile, analyzeMatch, chatWithAnalista } from './lib/gemini';
+import { generateRoast, analyzeProfile, analyzeMatch, chatWithAnalista, translateAppState } from './lib/gemini';
 import { supabase } from './lib/supabase';
 import { translations, Language } from './lib/translations';
 import axios from 'axios';
+import Markdown from 'react-markdown';
 
 interface ShameEntry {
   id: string;
@@ -62,6 +63,51 @@ export default function App() {
   const [showAnalysisScreen, setShowAnalysisScreen] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
 
+  const handleLanguageChange = async (newLang: Language) => {
+    if (newLang === language) return;
+    
+    const stateToTranslate: any = {};
+    if (lastRoast) stateToTranslate.lastRoast = lastRoast;
+    if (selectedMatch && selectedMatch.analysis) stateToTranslate.matchAnalysis = selectedMatch.analysis;
+    if (profileAnalysis) stateToTranslate.profileAnalysis = profileAnalysis;
+    if (chatMessages.length > 0) stateToTranslate.chatMessages = chatMessages;
+    if (mural.length > 0) {
+      stateToTranslate.mural = mural.map(m => ({ id: m.id, bot_response: m.bot_response }));
+    }
+    
+    setLanguage(newLang);
+
+    if (Object.keys(stateToTranslate).length > 0) {
+      setLoading(true);
+      if (selectedMatch) setAnalyzing(true);
+      
+      const translated = await translateAppState(stateToTranslate, newLang);
+      
+      if (translated) {
+        if (translated.lastRoast) {
+          setLastRoast(translated.lastRoast);
+          if (currentRoastData) {
+            setCurrentRoastData({ ...currentRoastData, roast: translated.lastRoast });
+          }
+        }
+        if (translated.matchAnalysis && selectedMatch) {
+          setSelectedMatch({...selectedMatch, analysis: translated.matchAnalysis});
+        }
+        if (translated.profileAnalysis) setProfileAnalysis(translated.profileAnalysis);
+        if (translated.chatMessages) setChatMessages(translated.chatMessages);
+        if (translated.mural) {
+          setMural(prev => prev.map(m => {
+            const t = translated.mural.find((x: any) => x.id === m.id);
+            return t ? { ...m, bot_response: t.bot_response } : m;
+          }));
+        }
+      }
+      
+      setLoading(false);
+      setAnalyzing(false);
+    }
+  };
+
   useEffect(() => {
     // Check for saved player in local storage
     const savedPlayer = localStorage.getItem('valorant_player');
@@ -91,30 +137,39 @@ export default function App() {
   const fetchMural = async () => {
     if (!supabase) return;
     
-    // Normal mural (recent 10)
-    const { data: muralData, error: muralError } = await supabase
-      .from('hall_of_shame')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(10);
-    
-    if (muralError) {
-      console.error("Error fetching mural:", muralError);
-      setSupabaseError(`${t.errors.details}: ${muralError.message}`);
-    } else if (muralData) {
-      setMural(muralData as ShameEntry[]);
-      setSupabaseError(null);
-    }
+    try {
+      // Normal mural (recent 10)
+      const { data: muralData, error: muralError } = await supabase
+        .from('hall_of_shame')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      
+      if (muralError) {
+        if (muralError.code !== 'PGRST125' && muralError.code !== '404') {
+          console.error("Error fetching mural:", muralError);
+        }
+      } else if (muralData) {
+        setMural(muralData as ShameEntry[]);
+        setSupabaseError(null);
+      }
 
-    // Top Bagres (most recent unique entries for leaderboard feel)
-    const { data: topData } = await supabase
-      .from('hall_of_shame')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(5);
+      // Top Bagres (most recent unique entries for leaderboard feel)
+      const { data: topData, error: topError } = await supabase
+        .from('hall_of_shame')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5);
 
-    if (topData) {
-      setTopBagres(topData as ShameEntry[]);
+      if (topError) {
+        if (topError.code !== 'PGRST125' && topError.code !== '404') {
+          console.error("Error fetching top bagres:", topError);
+        }
+      } else if (topData) {
+        setTopBagres(topData as ShameEntry[]);
+      }
+    } catch (err) {
+      console.error("Network or unexpected error fetching mural:", err);
     }
   };
 
@@ -128,7 +183,7 @@ export default function App() {
         }
         return prev + 1;
       });
-    }, 20);
+    }, 5);
   };
 
   const handleTrackerLogin = async (e: React.FormEvent) => {
@@ -274,21 +329,26 @@ export default function App() {
     if (!supabase || !currentRoastData || isPosted) return;
     
     setLoading(true);
-    const { error } = await supabase.from('hall_of_shame').insert([
-      {
-        user_id: player ? `${player.name}#${player.tag}` : 'web_user',
-        user_email: player ? `${player.name}#${player.tag} (${player.rank || 'BRONZE SOUL'})` : 'Anonymous',
-        user_input: currentRoastData.input,
-        bot_response: currentRoastData.roast
-      }
-    ]);
+    try {
+      const { error } = await supabase.from('hall_of_shame').insert([
+        {
+          user_id: player ? `${player.name}#${player.tag}` : 'web_user',
+          user_email: player ? `${player.name}#${player.tag} (${player.rank || 'BRONZE SOUL'})` : 'Anonymous',
+          user_input: currentRoastData.input,
+          bot_response: currentRoastData.roast
+        }
+      ]);
 
-    if (error) {
-      console.error("Error saving to mural:", error);
-      setSupabaseError(`Save failed: ${error.message}`);
-    } else {
-      setIsPosted(true);
-      fetchMural();
+      if (error) {
+        console.error("Error saving to mural:", error);
+        setSupabaseError(`Save failed: ${error.message}`);
+      } else {
+        setIsPosted(true);
+        fetchMural();
+      }
+    } catch (err: any) {
+      console.error("Network or unexpected error saving to mural:", err);
+      setSupabaseError(`Save failed: ${err.message || 'Network error'}`);
     }
     setLoading(false);
   };
@@ -297,13 +357,13 @@ export default function App() {
     <div className="min-h-screen bg-[#0f1923] text-[#ece8e1] overflow-x-hidden relative">
       <div className="fixed top-4 left-4 z-[100] flex gap-2">
         <button 
-          onClick={() => setLanguage('en')} 
+          onClick={() => handleLanguageChange('en')} 
           className={`val-btn !text-[10px] !px-2 !py-1 !min-h-0 !h-auto ${language === 'en' ? 'bg-[#ff4655] text-white border-[#ff4655]' : 'bg-black/40 text-[#ece8e1]/50 border-[#ece8e1]/10'}`}
         >
           EN
         </button>
         <button 
-          onClick={() => setLanguage('pt')} 
+          onClick={() => handleLanguageChange('pt')} 
           className={`val-btn !text-[10px] !px-2 !py-1 !min-h-0 !h-auto ${language === 'pt' ? 'bg-[#ff4655] text-white border-[#ff4655]' : 'bg-black/40 text-[#ece8e1]/50 border-[#ece8e1]/10'}`}
         >
           PT
@@ -398,9 +458,9 @@ export default function App() {
             </form>
 
             {supabaseError && (
-              <div className="border-l-4 border-[#ff4655] bg-[#ff4655]/10 p-4 animate-pulse">
+              <div className="border-l-4 border-[#ff4655] bg-[#ff4655]/10 p-4 animate-pulse mt-4">
                 <p className="text-[#ff4655] font-mono text-[10px] uppercase font-bold">
-                  DATABASE_ERROR: {supabaseError}
+                  ERROR: {supabaseError}
                 </p>
               </div>
             )}
@@ -549,12 +609,32 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* tactical separator */}
+                    <div className="py-2 flex items-center justify-between opacity-30">
+                      <div className="h-[1px] flex-1 bg-white/20"></div>
+                      <span className="mx-4 font-mono text-[8px] tracking-[0.4em]">VERDICT PROTOCOL V3.1</span>
+                      <div className="h-[1px] flex-1 bg-white/20"></div>
+                    </div>
+
                     {/* Final Verdict */}
-                    <div className="pt-4 border-t border-white/10">
-                      <span className="font-mono text-[10px] uppercase opacity-40 mb-2 block">{t.analysis.labels.finalVerdict}</span>
-                      <p className="font-mono text-sm leading-relaxed text-[#ece8e1] whitespace-pre-wrap italic bg-[#ff4655]/10 p-4 border border-[#ff4655]/20">
-                        {profileAnalysis.crushingSummary}
-                      </p>
+                    <div className="relative group">
+                      <div className="absolute -top-3 -left-2 bg-[#ff4655] text-white text-[8px] font-bold px-2 py-0.5 uppercase tracking-tighter skew-x-[-15deg] z-20">
+                        {t.analysis.labels.finalVerdict}
+                      </div>
+                      <div className="val-border bg-[#1f2933] border-[#ff4655]/40 p-5 relative overflow-hidden">
+                        {/* Technical grid background */}
+                        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '10px 10px' }} />
+                        
+                        <p className="font-mono text-sm leading-relaxed text-[#ece8e1] whitespace-pre-wrap italic uppercase relative z-10">
+                          {profileAnalysis.crushingSummary}
+                        </p>
+                        
+                        {/* Decorative corner */}
+                        <div className="absolute bottom-0 right-0 w-8 h-8 pointer-events-none">
+                          <div className="absolute bottom-0 right-0 w-[2px] h-4 bg-[#ff4655]"></div>
+                          <div className="absolute bottom-0 right-0 h-[2px] w-4 bg-[#ff4655]"></div>
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 ) : (
@@ -785,11 +865,17 @@ export default function App() {
                           </div>
                         </div>
                         
-                        <div className="bg-black/20 p-4 border border-white/20 italic">
-                          <span className="font-mono text-[9px] uppercase font-bold opacity-40 block mb-2">{t.analysis.labels.verdictSummary}</span>
-                          <p className="font-mono text-[11px] font-bold uppercase leading-relaxed">
-                            {profileAnalysis.crushingSummary}
-                          </p>
+                        <div className="relative mt-2">
+                           <div className="absolute -top-2 left-2 bg-black text-white text-[7px] font-bold px-1.5 py-0.5 uppercase tracking-tighter skew-x-[-15deg] z-20 border border-white/20">
+                            {t.analysis.labels.verdictSummary}
+                          </div>
+                          <div className="bg-black/30 p-4 border border-white/10 italic relative overflow-hidden group">
+                            {/* subtle scanline */}
+                            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-white/5 to-transparent h-2 top-0 group-hover:animate-scan-fast pointer-events-none" />
+                            <p className="font-mono text-[11px] font-bold uppercase leading-relaxed relative z-10">
+                              {profileAnalysis.crushingSummary}
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </>
@@ -817,24 +903,31 @@ export default function App() {
                     duration: triggerShake ? 0.3 : 0.5,
                     ease: "easeInOut"
                   }}
-                  className={`val-border p-8 bg-black text-white relative transition-colors duration-150 border-2 overflow-hidden border-[#ff4655] mb-8 min-h-[200px] flex flex-col justify-center`}
+                  className={`val-border p-8 bg-[#1f2933] text-[#ece8e1] relative transition-colors duration-150 border-2 overflow-hidden border-[#ff4655]/40 mb-8 min-h-[200px] flex flex-col justify-center`}
                 >
                   {/* Background Glitch Overlay */}
                   {triggerShake && (
                     <motion.div 
                       initial={{ opacity: 0 }}
                       animate={{ opacity: [0.3, 0.1, 0.3, 0] }}
-                      className="absolute inset-0 bg-valorant-red pointer-events-none z-0"
+                      className="absolute inset-0 bg-[#ff4655] pointer-events-none z-0"
                     />
                   )}
 
-                  <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-30 px-12">
-                    <div className={`py-3 font-display text-2xl skew-x-[-12deg] transition-all duration-150 flex items-center justify-center w-full ${triggerShake ? 'bg-valorant-red text-white scale-110 shadow-[0_0_20px_rgba(255,70,85,1)]' : 'bg-[#ff4655] text-[#0f1923]'}`}>
+                  <div className="absolute top-0 right-0 p-2 opacity-10 pointer-events-none">
+                    <AlertTriangle size={60} className="text-[#ff4655]" />
+                  </div>
+
+                  <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-30 px-8">
+                    <div className={`py-2 font-display text-base md:text-lg skew-x-[-10deg] italic flex items-center justify-center border-l-4 border-white w-full uppercase shadow-[0_4px_10px_rgba(0,0,0,0.3)] transition-all duration-150 ${triggerShake ? 'bg-white text-black scale-105 shadow-[0_0_20px_rgba(255,255,255,1)]' : 'bg-[#ff4655] text-white'}`}>
+                      <AlertTriangle size={18} className="mr-3" />
                       {loading ? t.analysis.compiling : (triggerShake ? t.dashboard.eliminated : t.dashboard.finalVerdict)}
                     </div>
                   </div>
+
+                  <div className="absolute inset-0 opacity-[0.05] pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle, #ff4655 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                   
-                  <div className="relative z-10 pt-16 text-center">
+                  <div className="relative z-10 pt-10">
                     {loading ? (
                       <div className="flex flex-col items-center gap-4 py-8">
                         <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }} transition={{ repeat: Infinity, duration: 1.5 }}>
@@ -843,21 +936,23 @@ export default function App() {
                         <p className="font-mono text-xs uppercase tracking-widest opacity-30 animate-pulse">{t.dashboard.generatingRoast}</p>
                       </div>
                     ) : (
-                      <>
-                        <p className={`text-2xl font-display uppercase italic leading-relaxed transition-all duration-150 tracking-tight ${triggerShake ? 'text-white glitch-red italic' : 'text-[#ff4655]'}`}>
-                          "{lastRoast}"
-                        </p>
+                      <div className="relative">
+                        <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-gradient-to-b from-[#ff4655] via-white/20 to-transparent" />
+                        <div className="pl-6">
+                          <div className={`text-left font-mono text-xs md:text-sm leading-relaxed uppercase italic whitespace-pre-wrap transition-all duration-150 markdown-body space-y-3 ${triggerShake ? 'text-white glitch-red' : 'text-white/90 [text-shadow:0_0_1px_rgba(255,255,255,0.2)]'}`}>
+                            <Markdown>{lastRoast}</Markdown>
+                          </div>
 
-                        <div className="mt-8 flex flex-col gap-3">
-                          <button
-                            onClick={handlePostToMural}
-                            disabled={isPosted || loading}
-                            className={`w-full py-3 font-display text-sm uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 skew-x-[-10deg] ${
-                              isPosted 
-                              ? 'bg-gray-800 text-gray-400 border-gray-700 cursor-default grayscale' 
-                              : 'bg-white text-black hover:bg-valorant-red hover:text-white border-black hover:border-white border-2'
-                            }`}
-                          >
+                          <div className="mt-8 flex flex-col gap-3">
+                            <button
+                              onClick={handlePostToMural}
+                              disabled={isPosted || loading}
+                              className={`w-full py-3 font-display text-sm uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 skew-x-[-10deg] ${
+                                isPosted 
+                                ? 'bg-gray-800 text-gray-400 border-gray-700 cursor-default grayscale' 
+                                : 'bg-[#ece8e1] text-[#0f1923] hover:bg-[#ff4655] hover:text-white border-[#0f1923] hover:border-white border-2'
+                              }`}
+                            >
                             {isPosted ? (
                               <>
                                 <ShieldAlert size={18} className="skew-x-[10deg]" />
@@ -892,16 +987,20 @@ export default function App() {
                               <div className="h-[1px] flex-1 bg-white/20"></div>
                             </div>
                           )}
+                          </div>
                         </div>
-                      </>
+                      </div>
                     )}
                   </div>
 
                 {/* Valorant decorative elements */}
-                <div className="absolute bottom-2 right-2 flex gap-1 opacity-20">
-                  <div className="w-1 h-4 bg-white rotate-12"></div>
-                  <div className="w-1 h-4 bg-white rotate-12"></div>
-                  <div className="w-1 h-4 bg-white rotate-12"></div>
+                <div className="absolute top-0 left-0 w-8 h-8 pointer-events-none opacity-20">
+                  <div className="absolute top-4 left-0 w-[2px] h-4 bg-white"></div>
+                  <div className="absolute top-4 left-0 h-[2px] w-4 bg-white"></div>
+                </div>
+                <div className="absolute bottom-0 right-0 w-8 h-8 pointer-events-none opacity-40">
+                  <div className="absolute bottom-4 right-0 w-[2px] h-4 bg-[#ff4655]"></div>
+                  <div className="absolute bottom-4 right-0 h-[2px] w-4 bg-[#ff4655]"></div>
                 </div>
               </motion.div>
             )}
@@ -961,16 +1060,40 @@ export default function App() {
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="val-border p-8 bg-[#0f1923] border-[#ff4655] text-[#ece8e1] relative"
+                  className="val-border p-8 bg-[#1f2933] border-[#ff4655]/40 text-[#ece8e1] relative overflow-hidden"
                 >
+                  <div className="absolute top-0 right-0 p-2 opacity-10">
+                    <Shield size={60} className="text-[#ff4655]" />
+                  </div>
+                  
                   <div className="absolute -top-1 left-0 w-full flex justify-center items-center z-20 px-8">
-                    <div className="bg-[#ff4655] text-white py-2 font-display text-sm skew-x-[-10deg] italic flex items-center justify-center border-l-4 border-[#0f1923] w-full">
+                    <div className="bg-[#ff4655] text-white py-2 font-display text-base md:text-lg skew-x-[-10deg] italic flex items-center justify-center border-l-4 border-white w-full uppercase shadow-[0_4px_10px_rgba(0,0,0,0.3)]">
+                      <ShieldAlert size={18} className="mr-3" />
                       {t.errors.details}
                     </div>
                   </div>
-                  <p className="font-mono text-xs leading-relaxed italic whitespace-pre-wrap opacity-80 decoration-[#ff4655]/30 pt-10">
-                    {selectedMatch.analysis}
-                  </p>
+
+                  <div className="mt-8 relative">
+                    <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-gradient-to-b from-[#ff4655] via-white/20 to-transparent" />
+                    <div className="pl-6">
+                      <div className="flex items-center gap-2 mb-4 opacity-30">
+                        <span className="font-mono text-[9px] uppercase tracking-tighter">DATASET ID: {selectedMatch.metadata?.matchid?.slice(0, 8) || 'VAL_X'}</span>
+                        <div className="h-[1px] w-12 bg-white/20"></div>
+                        <span className="font-mono text-[9px] uppercase tracking-tighter">TIMESTAMP: {new Date().toLocaleTimeString()}</span>
+                      </div>
+                      
+                      <p className="font-mono text-xs md:text-sm leading-relaxed italic whitespace-pre-wrap text-white/90 uppercase [text-shadow:0_0_1px_rgba(255,255,255,0.2)]">
+                        {selectedMatch.analysis}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* technical footer for aesthetic */}
+                  <div className="mt-6 flex justify-end gap-2 pr-2">
+                    <div className="w-1 h-3 bg-red-500 opacity-40"></div>
+                    <div className="w-1 h-3 bg-red-400 opacity-40"></div>
+                    <div className="w-1 h-3 bg-red-600 opacity-40"></div>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -997,10 +1120,10 @@ export default function App() {
                     <div className={`max-w-[85%] p-4 text-xs font-mono tracking-tight leading-snug ${
                       msg.role === 'user' 
                       ? 'bg-[#0f1923] border-r-4 border-[#00b2a9] text-[#ece8e1]' 
-                      : 'bg-[#ff4655] text-white skew-x-[-5deg]'
+                      : 'bg-[#ff4655] text-white skew-x-[-5deg] markdown-body'
                     }`}>
                       <div className={msg.role === 'model' ? 'skew-x-[5deg]' : ''}>
-                        {msg.text}
+                        {msg.role === 'user' ? msg.text : <Markdown>{msg.text}</Markdown>}
                       </div>
                     </div>
                   </div>
@@ -1120,9 +1243,9 @@ export default function App() {
                     <p className="text-[10px] md:text-xs font-mono text-[#ece8e1]/60 mb-3 italic line-clamp-2">
                       "{entry.user_input}"
                     </p>
-                    <p className="text-[#ece8e1] text-xs md:text-sm font-bold uppercase tracking-tight leading-[1.3] group-hover:text-[#ff4655] transition-colors">
-                      {entry.bot_response}
-                    </p>
+                    <div className="text-[#ece8e1] text-xs md:text-sm font-sans leading-relaxed group-hover:text-[#ff4655] transition-colors markdown-body">
+                      <Markdown>{entry.bot_response}</Markdown>
+                    </div>
                   </motion.div>
                 ))}
               </div>

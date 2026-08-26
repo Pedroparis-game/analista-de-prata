@@ -1,9 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Anton&family=JetBrains+Mono:wght@500;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Teko:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;800&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Anton", sans-serif;
+  --font-sans: "Rajdhani", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Teko", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
@@ -187,3 +187,4 @@
 .val-cursor {
   cursor: crosshair;
 }
+.markdown-body p { margin-bottom: 0.75rem; } .markdown-body strong { font-weight: 700; color: inherit; }

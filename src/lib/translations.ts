@@ -38,7 +38,7 @@ export const translations = {
       compiling: "Compiling personalized insults...",
       empty: "The system failed to find words to describe your badness.",
       accessButton: "ACCESS FULL DASHBOARD",
-      protocol: "ANALYSIS_PROTOCOL",
+      protocol: "ANALYSIS PROTOCOL",
       labels: {
         archetype: "Archetype Identified",
         strategic: "Strategic Discrepancy",
@@ -148,7 +148,7 @@ export const translations = {
       compiling: "Compilando insultos personalizados...",
       empty: "O sistema falhou em encontrar palavras para descrever sua ruindade.",
       accessButton: "ACESSAR DASHBOARD COMPLETO",
-      protocol: "PROTOCOLO_ANALISE",
+      protocol: "PROTOCOLO DE ANÁLISE",
       labels: {
         archetype: "Arquétipo Identificado",
         strategic: "Discrepância Estratégica",

@@ -63,14 +63,14 @@ export async function generateRoast(userInput: string, playerStats?: any, lang: 
   try {
     let finalPrompt = `${lang === 'en' ? 'OBLIGATORY: RESPONSE IN ENGLISH' : 'OBRIGATÓRIO: RESPOSTA EM PORTUGUÊS'}\n\n`;
     const structLimit = lang === 'pt' 
-      ? "VOCÊ DEVE RESPONDER COM EXATAMENTE 3 BULLET POINTS CURTOS E AGRESSIVOS NO FORMATO 'REVISÃO DE VOD'.\n" +
-        "1. REVISÃO TÁTICA E MECÂNICA: Invente um erro de game-sense específico e vergonhoso baseado no relato do usuário.\n" +
-        "2. REALITY CHECK ESPORTS: Zombe do KDA e da ilusão do usuário. Diga que ele está longe da Furia/LOUD/MIBR e que joga com o monitor desligado.\n" +
-        "3. VALUATION DE MERCADO (WEB3): Declare o valor da 'ação' do jogador. Compare com uma memecoin que deu rug-pull ou NFT que foi a zero."
-      : "YOU MUST RESPOND WITH EXACTLY 3 SHORT, AGGRESSIVE BULLET POINTS IN A 'VOD REVIEW' FORMAT.\n" +
-        "1. TACTICAL & MECHANICAL REVIEW: Invent a highly specific, embarrassing game-sense failure based on the user's input.\n" +
-        "2. ESPORTS REALITY CHECK: Violently mock their KDA and delusion. Tell them they are lightyears away from being picked up by Furia/Sentinels/G2 and they play like the monitor is off.\n" +
-        "3. MARKET VALUATION (WEB3): Declare their current 'player stock' value. Compare them to a rug-pulled memecoin or an NFT that went to zero.";
+      ? "VOCÊ DEVE RESPONDER COM EXATAMENTE 3 BULLET POINTS, USANDO NO MÁXIMO 1 OU 2 FRASES CURTAS POR PONTO. SEJA DIRETO E AGRESSIVO NO FORMATO 'REVISÃO DE VOD'.\n" +
+        "1. REVISÃO TÁTICA: Invente um erro de game-sense rápido e vergonhoso baseado no relato do usuário.\n" +
+        "2. REALITY CHECK: Zombe do KDA/rank em uma frase. Diga que joga com monitor desligado.\n" +
+        "3. VALUATION WEB3: Dê o valor da 'ação' do jogador em uma frase comparando com crypto falida."
+      : "YOU MUST RESPOND WITH EXACTLY 3 BULLET POINTS, USING A MAXIMUM OF 1 OR 2 SHORT SENTENCES PER BULLET. BE DIRECT AND AGGRESSIVE IN A 'VOD REVIEW' FORMAT.\n" +
+        "1. TACTICAL REVIEW: Invent a quick, embarrassing game-sense failure based on the user's input.\n" +
+        "2. REALITY CHECK: Mock their KDA/rank in one sentence. Tell them they play with their monitor off.\n" +
+        "3. WEB3 VALUATION: Declare their 'player stock' value in one sentence comparing it to a dead memecoin.";
 
     if (playerStats) {
       const matchSummaries = playerStats.matches?.slice(0, 3).map((m: any) => summarizeMatch(m, playerStats.name));
@@ -92,7 +92,7 @@ ${structLimit}
 
     console.log("Calling Gemini API for Roast...");
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.7-flash",
       contents: finalPrompt,
       config: {
         systemInstruction: getSystemInstruction(lang) + `\n\nIMPORTANT: ALWAYS FOLLOW THE 3-BULLET VOD REVIEW FORMAT. YOUR RESPONSE MUST BE STRICTLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`,
@@ -137,7 +137,7 @@ Recent Match Summaries: ${JSON.stringify(matchSummaries)}`;
 
     console.log(`Calling Gemini API for Profile Analysis in ${lang}...`);
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.7-flash",
       contents: prompt + `\n\n(IMPORTANT: RESPOND EVERYTHING IN ${lang === 'pt' ? 'PORTUGUESE' : 'ENGLISH'})`,
       config: { 
         systemInstruction: getSystemInstruction(lang) + `\n\nIMPORTANT: YOU ARE A DEEP SCOUTING SYSTEM. PROVIDE A STRUCTURED ANALYSIS. RESPOND ONLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`, 
@@ -215,7 +215,7 @@ export async function analyzeMatch(match: any, playerStats: any, lang: string = 
     
     console.log(`Calling Gemini API for Match Analysis in ${lang}...`);
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.7-flash",
       contents: prompt + `\n\n(IMPORTANT: RESPOND EVERYTHING IN ${lang === 'pt' ? 'PORTUGUESE' : 'ENGLISH'})`,
       config: { 
         systemInstruction: getSystemInstruction(lang) + `\n\nIMPORTANT: PROVIDE A DETAILED AND TOXIC MATCH RECAP. RESPOND ONLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`, 
@@ -243,7 +243,7 @@ export async function chatWithAnalista(history: any[], newMessage: string, stats
 
     console.log(`Calling Gemini API for Chat in ${lang}...`);
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.7-flash",
       contents: contents,
       config: { 
         systemInstruction: getSystemInstruction(lang) + `\n\nUser Context: ${stats.name}#${stats.tag}, Rank ${stats.rank}. IMPORTANT: RESPOND ONLY IN ${lang === 'pt' ? 'PORTUGUESE (PT-BR)' : 'ENGLISH'}.`,
@@ -255,4 +255,32 @@ export async function chatWithAnalista(history: any[], newMessage: string, stats
     console.error('GEMINI API ERROR (chat):', error);
     return lang === 'pt' ? "Pare de me cansar com suas perguntas de noob. Até a API cansou de você." : "Stop tiring me with your noob questions. Even the API is tired of you.";
   }
+}
+
+export async function translateAppState(stateObj: any, targetLang: string) {
+  const ai = getAIClient();
+  if (!ai) return stateObj; // fallback
+
+  try {
+    const prompt = `Translate the string values inside the following JSON object to ${targetLang === 'pt' ? 'Portuguese (pt-BR)' : 'English'}. Preserve the exact JSON structure and keys. Return ONLY valid JSON, no markdown formatting.
+
+JSON to translate:
+${JSON.stringify(stateObj)}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.7-flash",
+      contents: prompt,
+      config: {
+        temperature: 0.1,
+        responseMimeType: "application/json"
+      }
+    });
+
+    if (response.text) {
+      return JSON.parse(response.text);
+    }
+  } catch (error) {
+    console.error('Translation error:', error);
+  }
+  return stateObj;
 }
